@@ -1,6 +1,10 @@
 """Shared utilities for LLM client modules."""
 
 import json
+import os
+import signal
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -33,6 +37,30 @@ def is_quota_exceeded_error(message: str) -> bool:
         "usage limit",
     )
     return any(phrase in text for phrase in phrases)
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Terminate a subprocess and any children it may have spawned."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return
+        except OSError:
+            pass
+    # On Unix, callers start CLI subprocesses with start_new_session=True so
+    # the child becomes its own process-group leader. That makes killpg(pid)
+    # terminate the full CLI tree instead of only the direct child process.
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (AttributeError, OSError, ProcessLookupError):
+        proc.kill()
 
 
 def archive(model, archive_dir, call_num, label, prompt, system_prompt,

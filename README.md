@@ -4,7 +4,7 @@
 
 Theorem prover powered by language models.
 
-A **planner** coordinates proof search by maintaining a whiteboard and repository, delegating focused tasks to parallel **workers** via Claude CLI or local models (vLLM).
+A **planner** coordinates proof search by maintaining a whiteboard and repository, delegating focused tasks to parallel **workers** via Claude CLI, OpenAI Codex CLI, or local models (vLLM).
 
 ## How it works
 
@@ -24,6 +24,7 @@ Modes:
 
 - Python 3.10+
 - **Claude** (default): [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` command on PATH)
+- **Codex** (alternative): [Codex CLI](https://developers.openai.com/codex/cli/) (`codex` command on PATH)
 - **Local models** (alternative): any OpenAI-compatible server such as [vLLM](https://github.com/vllm-project/vllm); pass `--provider-url` to point at it
 
 ## Install
@@ -67,7 +68,20 @@ openprover --theorem examples/cauchy_schwarz.md --planner-model opus --worker-mo
 openprover --theorem examples/cauchy_schwarz.md --no-isolation
 
 # Use a local model (via vLLM)
-openprover --theorem examples/infinite_primes.md --model minimax-m2.5 --provider-url http://localhost:8000
+openprover --theorem examples/infinite_primes.md --provider local --model minimax-m2.5 --provider-url http://localhost:8000
+
+# Use OpenAI Codex CLI (uses your Codex CLI default model)
+openprover --theorem examples/infinite_primes.md --model codex
+
+# Use OpenAI Codex CLI with an explicit model
+openprover --theorem examples/infinite_primes.md --provider codex --model gpt-5.4
+
+# Equivalent Codex shorthand
+openprover --theorem examples/infinite_primes.md --model codex:gpt-5.4
+
+# Increase reasoning effort
+openprover --theorem examples/infinite_primes.md --provider codex --model gpt-5.4 --reasoning-effort xhigh
+openprover --theorem examples/erdos_838.md --model opus --reasoning-effort high
 
 # Prove and formalize in Lean 4
 openprover --theorem examples/addition.md \
@@ -93,9 +107,15 @@ openprover --theorem examples/addition.md \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model` | `sonnet` | Model for both planner and worker |
+| `--provider` | auto | Backend provider for both planner and worker |
+| `--planner-provider` | | Override provider for planner |
+| `--worker-provider` | | Override provider for worker |
+| `--model` | auto | Model for both planner and worker (`sonnet` for Claude by default, Codex CLI default for Codex, `minimax-m2.5` for local) |
 | `--planner-model` | | Override model for planner |
 | `--worker-model` | | Override model for worker |
+| `--reasoning-effort` | | Reasoning effort for both planner and worker |
+| `--planner-reasoning-effort` | | Override reasoning effort for planner |
+| `--worker-reasoning-effort` | | Override reasoning effort for worker |
 | `--max-time` | `4h` | Wall-clock time budget (e.g. `30m`, `2h`) |
 | `--max-tokens` | | Output token budget (mutually exclusive with `--max-time`) |
 | `--conclude-after` | `0.99` | Fraction of budget that triggers conclusion phase (0.9-1.0) |
@@ -111,10 +131,25 @@ openprover --theorem examples/addition.md \
 | `--headless` | off | Non-interactive mode (logs to stdout, implies `--autonomous`) |
 | `--verbose` | off | Show full LLM responses |
 | `--read-only` | off | Inspect run without resuming |
-| `--provider-url` | `http://localhost:8000` | Server URL for local models |
+| `--provider-url` | `http://localhost:8000` | Server URL for local OpenAI-compatible models |
 | `--answer-reserve` | `4096` | Tokens reserved for answer after thinking (local models) |
 
-Available Claude models: `sonnet`, `opus`. For local models, pass any model name supported by your OpenAI-compatible server (e.g. `minimax-m2.5`) together with `--provider-url`.
+Built-in model aliases:
+- `sonnet`, `opus`: Claude CLI backends
+- `codex`: Codex CLI backend using the local Codex CLI default model
+- `minimax-m2.5`: local OpenAI-compatible/vLLM backend
+
+For Codex-specific model names such as `gpt-5.4` or `gpt-5.2`, use `--provider codex --model <name>` or the shorthand `--model codex:<name>`.
+
+Reasoning effort:
+- Claude supports `low`, `medium`, `high`, `max`
+- Codex supports `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
+- Local OpenAI-compatible models do not currently support `--reasoning-effort` in OpenProver
+
+Codex CLI notes:
+- `codex exec --json` only yields the final assistant message, so OpenProver cannot stream partial Codex text into the TUI
+- Codex soft interrupt is advisory: it lets the current response finish so the final answer is preserved
+- Cost is estimated from token usage for known explicit GPT-5/Codex model ids; the bare `codex` alias and unknown model names still show `$0.0000`
 
 ### TUI controls
 
@@ -155,7 +190,7 @@ When `--lean-project` is set with a tool-capable worker model, workers get acces
 | `lean_verify(code)` | Compile Lean 4 code via `lake env lean`, returns OK or compiler errors |
 | `lean_search(query)` | Search Mathlib/Lean declarations by natural language query |
 
-Tools are provided via MCP (Claude workers) or native tool calling (vLLM workers). Actions are shown in the worker tab and can be browsed with arrow keys.
+Tools are provided via MCP (Claude or Codex workers) or native tool calling (vLLM workers). Actions are shown in the worker tab and can be browsed with arrow keys.
 
 ## Output
 

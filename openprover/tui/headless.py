@@ -88,6 +88,11 @@ class HeadlessTUI:
     def update_step(self, step_num: int):
         pass
 
+    def _sync_step_log_line(self, step_idx: int):
+        # The interactive TUI redraws an in-place step status line; headless
+        # output is append-only, so there is nothing to synchronize here.
+        pass
+
     def update_budget(self, status: str):
         self.budget_status = status
 

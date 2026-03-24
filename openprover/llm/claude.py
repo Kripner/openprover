@@ -4,13 +4,18 @@ import json
 import logging
 import os
 import re
-import signal
 import subprocess
 import threading
 import time
 from pathlib import Path
 
-from ._base import Interrupted, QuotaExceeded, archive, is_quota_exceeded_error
+from ._base import (
+    Interrupted,
+    QuotaExceeded,
+    archive,
+    is_quota_exceeded_error,
+    kill_process_tree,
+)
 
 logger = logging.getLogger("openprover.llm")
 
@@ -19,14 +24,17 @@ class LLMClient:
     """Calls Claude via the CLI and archives all interactions."""
 
     context_length = 200_000  # Claude models
+    supports_mcp_tools = True
 
     def __init__(self, model: str, archive_dir: Path,
-                 max_output_tokens: int = 128_000):
+                 max_output_tokens: int = 128_000,
+                 reasoning_effort: str | None = None):
         self.model = model
         self.archive_dir = archive_dir
         self.call_count = 0
         self.total_cost = 0.0
         self.max_output_tokens = max_output_tokens
+        self.reasoning_effort = reasoning_effort
         self.mcp_config: dict | None = None  # set by Prover for MCP tool-calling
         self._interrupted = threading.Event()
         self._soft_interrupted = threading.Event()
@@ -56,10 +64,7 @@ class LLMClient:
         with self._procs_lock:
             for proc in self._active_procs:
                 if proc.poll() is None:
-                    try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except (OSError, ProcessLookupError):
-                        proc.kill()
+                    kill_process_tree(proc)
 
     def clear_interrupt(self):
         """Reset the interrupt flag so new calls can proceed."""
@@ -69,6 +74,38 @@ class LLMClient:
     def clear_soft_interrupt(self):
         """Reset only the soft interrupt flag (before Phase 2 calls)."""
         self._soft_interrupted.clear()
+
+    def _build_cmd(self, *, system_prompt: str, json_schema: dict | None,
+                   web_search: bool, use_streaming: bool) -> list[str]:
+        """Build a Claude CLI command for a single call."""
+        cmd = [
+            "claude", "-p",
+            "--model", self.model,
+            "--system-prompt", system_prompt,
+        ]
+        if self.reasoning_effort:
+            cmd.extend(["--effort", self.reasoning_effort])
+
+        if use_streaming:
+            cmd.extend(["--output-format", "stream-json", "--verbose",
+                         "--include-partial-messages"])
+        else:
+            cmd.extend(["--output-format", "json"])
+
+        if web_search:
+            cmd.extend(["--permission-mode", "bypassPermissions",
+                         "--allowedTools", "WebSearch WebFetch"])
+        elif self.mcp_config:
+            cmd.extend(["--mcp-config", json.dumps(self.mcp_config),
+                         "--strict-mcp-config",
+                         "--permission-mode", "bypassPermissions",
+                         "--allowedTools",
+                         "mcp__lean_tools__lean_verify mcp__lean_tools__lean_search"])
+        else:
+            cmd.extend(["--tools", ""])
+        if json_schema:
+            cmd.extend(["--json-schema", json.dumps(json_schema)])
+        return cmd
 
     def call(
         self,
@@ -115,31 +152,12 @@ class LLMClient:
             logger.info("[%s] interrupted before call started", label)
             raise Interrupted()
 
-        cmd = [
-            "claude", "-p",
-            "--model", self.model,
-            "--system-prompt", system_prompt,
-        ]
-
-        if use_streaming:
-            cmd.extend(["--output-format", "stream-json", "--verbose",
-                         "--include-partial-messages"])
-        else:
-            cmd.extend(["--output-format", "json"])
-
-        if web_search:
-            cmd.extend(["--permission-mode", "bypassPermissions",
-                         "--allowedTools", "WebSearch WebFetch"])
-        elif self.mcp_config:
-            cmd.extend(["--mcp-config", json.dumps(self.mcp_config),
-                         "--strict-mcp-config",
-                         "--permission-mode", "bypassPermissions",
-                         "--allowedTools",
-                         "mcp__lean_tools__lean_verify mcp__lean_tools__lean_search"])
-        else:
-            cmd.extend(["--tools", ""])
-        if json_schema:
-            cmd.extend(["--json-schema", json.dumps(json_schema)])
+        cmd = self._build_cmd(
+            system_prompt=system_prompt,
+            json_schema=json_schema,
+            web_search=web_search,
+            use_streaming=use_streaming,
+        )
 
         start = time.time()
 

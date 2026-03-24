@@ -12,7 +12,7 @@ from pathlib import Path
 from . import prompts
 from .budget import Budget
 from .lean import LeanTheorem, LeanWorkDir, run_lean_check, lean_has_errors, WORKER_TOOLS, execute_worker_tool
-from .llm import Interrupted, LLMClient, QuotaExceeded
+from .llm import Interrupted, QuotaExceeded
 from .tui import TUI
 from .tui._colors import YELLOW, GREEN, RESET as _RESET
 
@@ -268,8 +268,8 @@ class Prover:
         # Tool calling for workers
         self.lean_explore_service = None
         if self.lean_worker_tools:
-            if isinstance(self.worker_llm, LLMClient):
-                # Claude CLI: configure MCP server for tool calling
+            if getattr(self.worker_llm, "supports_mcp_tools", False):
+                # CLI backends with MCP support: configure Lean tool calling
                 mcp_config = {
                     "mcpServers": {
                         "lean_tools": {
@@ -286,7 +286,8 @@ class Prover:
                     }
                 }
                 self.worker_llm.mcp_config = mcp_config
-                logger.info("Claude MCP tool calling configured")
+                logger.info("%s MCP tool calling configured",
+                            type(self.worker_llm).__name__)
             elif getattr(self.worker_llm, 'vllm', False):
                 # vLLM: initialize LeanExplore for in-process tool execution
                 try:
@@ -299,7 +300,10 @@ class Prover:
                 except Exception as e:
                     logger.warning("LeanExplore init failed: %s", e)
             else:
-                logger.warning("lean_worker_tools enabled but worker is neither Claude nor vLLM - tools disabled")
+                logger.warning(
+                    "lean_worker_tools enabled but worker has no MCP/vLLM "
+                    "tool support - tools disabled"
+                )
 
         # Derive theorem name for header
         lines = self.theorem_text.strip().splitlines()
