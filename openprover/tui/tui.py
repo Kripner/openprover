@@ -27,6 +27,7 @@ class TUI(TextMixin, StreamMixin, NavMixin, TabsMixin, StepsMixin,
     def __init__(self):
         self.rows = 0
         self.cols = 0
+        self._resize_pending = False
         self.trace_visible = True
         self.view = "whiteboard_split"
         self.whiteboard = ""
@@ -123,7 +124,7 @@ class TUI(TextMixin, StreamMixin, NavMixin, TabsMixin, StepsMixin,
         with self._write_lock:
             self._write_raw('\033[?1049h\033[2J\033[?1000h\033[?1006h')
             self._draw_header()
-            self._write_raw(f'\033[{self._content_start};{self.rows}r')
+            self._write_raw(self._scroll_region_seq())
             sys.stdout.flush()
         self._write(f'\033[{self._content_start};1H\033[?25l')
         self._active = True
@@ -160,11 +161,21 @@ class TUI(TextMixin, StreamMixin, NavMixin, TabsMixin, StepsMixin,
                 pass
 
     def _on_resize(self, signum, frame):
+        self._resize_pending = True
+
+    def _apply_resize(self):
+        self._resize_pending = False
         size = shutil.get_terminal_size()
-        self.cols, self.rows = size.columns, size.lines
+        self.cols = max(size.columns, 1)
+        self.rows = max(size.lines, 1)
         self._write('\033[2J')
-        self._write(f'\033[{self._content_start};{self.rows}r')
+        self._write(self._scroll_region_seq())
         self._redraw()
+
+    def _scroll_region_seq(self) -> str:
+        if self.rows < self._content_start:
+            return '\033[r'
+        return f'\033[{self._content_start};{self.rows}r'
 
     # ── Low-level output ────────────────────────────────────────
 
