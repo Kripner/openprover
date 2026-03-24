@@ -12,7 +12,7 @@ from pathlib import Path
 from . import prompts
 from .budget import Budget
 from .lean import LeanTheorem, LeanWorkDir, run_lean_check, lean_has_errors, WORKER_TOOLS, execute_worker_tool
-from .llm import Interrupted, LLMClient
+from .llm import Interrupted, LLMClient, QuotaExceeded
 from .tui import TUI
 from .tui._colors import YELLOW, GREEN, RESET as _RESET
 
@@ -607,6 +607,11 @@ class Prover:
                 self.tui.stream_end(tab="planner")
                 logger.info("Planner interrupted")
                 return self._handle_interrupt(step_dir)
+            except QuotaExceeded as e:
+                self.tui.stream_end(tab="planner")
+                return self._handle_quota_exceeded(
+                    step_dir, action="planner", error=str(e),
+                )
             except RuntimeError as e:
                 self.tui.stream_end(tab="planner")
                 logger.error("Planner error: %s", e)
@@ -656,6 +661,11 @@ class Prover:
                     except Interrupted:
                         self.tui.stream_end(tab="planner")
                         return self._handle_interrupt(step_dir)
+                    except QuotaExceeded as e:
+                        self.tui.stream_end(tab="planner")
+                        return self._handle_quota_exceeded(
+                            step_dir, action="planner", error=str(e), resp=last_resp,
+                        )
                     except RuntimeError as e:
                         self.tui.stream_end(tab="planner")
                         logger.error("Phase 2 error: %s", e)
@@ -785,7 +795,8 @@ class Prover:
 
             # Stop immediately when the session is complete
             if result == "stop":
-                self._save_step_meta(step_dir, status="ok", action=action, resp=resp)
+                if not meta_saved:
+                    self._save_step_meta(step_dir, status="ok", action=action, resp=resp)
                 return "stop"
 
         # Save metadata once for steps where no heavy action saved it already
@@ -855,6 +866,23 @@ class Prover:
             self._push_output(f"Human feedback: {user_resp}")
             self.tui.show_replan_notice("Feedback noted - will replan next step")
             return "continue"
+
+    def _handle_quota_exceeded(self, step_dir: Path, *, action: str,
+                               error: str, resp: dict | None = None,
+                               workers: list[dict] | None = None) -> str:
+        """Persist quota-limit state and stop without finalizing the run."""
+        logger.error("%s quota exceeded: %s", action or "LLM", error)
+        self.tui.log(f"Quota exceeded: {error}", color="red")
+        self._save_step_meta(
+            step_dir,
+            status="quota_exceeded",
+            action=action,
+            resp=resp,
+            error=error,
+            workers=workers,
+        )
+        self.shutting_down = True
+        return "stop"
 
     def _handle_interrupt(self, step_dir: Path) -> str:
         """Handle CTRL+C during planner/worker call.
@@ -1248,7 +1276,12 @@ class Prover:
                 self.tui.log("Interrupted - switching to manual mode", color="yellow")
 
         # ── Verifier phase ──
-        verifier_resps = self._run_verifiers(tasks, worker_resps, workers_dir)
+        quota_worker_errors = [
+            w for w in worker_resps if w and w.get("error") == "quota_exceeded"
+        ]
+        verifier_resps = {}
+        if not quota_worker_errors:
+            verifier_resps = self._run_verifiers(tasks, worker_resps, workers_dir)
 
         # Build combined output: merge completed_workers (from prior run)
         # with freshly-spawned worker results.
@@ -1350,6 +1383,19 @@ class Prover:
         self.tui.step_entries[self._step_idx]["verdicts"] = verdicts
         self.tui._sync_step_log_line(self._step_idx)
 
+        quota_verifier_errors = [
+            v for v in verifier_resps.values()
+            if v and v.get("error") == "quota_exceeded"
+        ]
+        if quota_worker_errors or quota_verifier_errors:
+            return self._handle_quota_exceeded(
+                step_dir,
+                action="spawn",
+                error="Provider quota/rate limit reached during worker execution.",
+                resp=planner_resp,
+                workers=[w for w in worker_resps if w],
+            )
+
         # Save step metadata with worker details
         status = "interrupted" if any_interrupted else "ok"
         self._save_step_meta(
@@ -1428,6 +1474,13 @@ class Prover:
             self._push_output(result)
             search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
                            "raw": {}, "error": "interrupted"}
+        except QuotaExceeded as e:
+            self.tui.stream_end(tab=wid)
+            result = f"Literature search failed: {e}"
+            self.tui.log(f"Search error: {e}", color="red")
+            self._push_output(result)
+            search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
+                           "raw": {}, "error": "quota_exceeded"}
         except RuntimeError as e:
             self.tui.stream_end(tab=wid)
             result = f"Literature search failed: {e}"
@@ -1436,6 +1489,15 @@ class Prover:
             search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
                            "raw": {}, "error": str(e)}
         self.tui.set_waiting_status("")
+
+        if search_resp and search_resp.get("error") == "quota_exceeded":
+            return self._handle_quota_exceeded(
+                step_dir,
+                action="literature_search",
+                error=result,
+                resp=planner_resp,
+                workers=[search_resp],
+            )
 
         status = "ok"
         if search_resp and search_resp.get("error") == "interrupted":
@@ -1542,6 +1604,10 @@ class Prover:
             logger.info("[%s] interrupted", worker_id)
             resp = {"result": "(terminated by user)", "cost": 0.0,
                     "duration_ms": 0, "raw": {}, "error": "interrupted"}
+        except QuotaExceeded as e:
+            self.tui.stream_end(tab=worker_id)
+            resp = {"result": f"Worker error: {e}", "cost": 0.0,
+                    "duration_ms": 0, "raw": {}, "error": "quota_exceeded"}
         except RuntimeError as e:
             self.tui.stream_end(tab=worker_id)
             resp = {"result": f"Worker error: {e}", "cost": 0.0,
@@ -1690,7 +1756,7 @@ class Prover:
         """Run independent verifiers for all non-interrupted workers. Returns {worker_idx: resp}."""
         non_interrupted = [
             (i, t, w) for i, (t, w) in enumerate(zip(tasks, worker_resps))
-            if w and w.get("error") != "interrupted" and w.get("result")
+            if w and not w.get("error") and w.get("result")
         ]
         verifier_resps: dict[int, dict] = {}
         if not non_interrupted:
@@ -1765,6 +1831,10 @@ class Prover:
             logger.info("[%s] interrupted", verifier_id)
             resp = {"result": "(terminated by user)", "cost": 0.0,
                     "duration_ms": 0, "raw": {}, "error": "interrupted"}
+        except QuotaExceeded as e:
+            self.tui.stream_end(tab=verifier_id)
+            resp = {"result": f"Verifier error: {e}", "cost": 0.0,
+                    "duration_ms": 0, "raw": {}, "error": "quota_exceeded"}
         except RuntimeError as e:
             self.tui.stream_end(tab=verifier_id)
             resp = {"result": f"Verifier error: {e}", "cost": 0.0,

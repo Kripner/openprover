@@ -9,9 +9,30 @@ class Interrupted(Exception):
     pass
 
 
+class QuotaExceeded(RuntimeError):
+    """Raised when the provider refuses a call due to quota/rate limits."""
+    pass
+
+
 class StreamingUnavailable(RuntimeError):
     """Raised when HF server cannot stream in current configuration."""
     pass
+
+
+def is_quota_exceeded_error(message: str) -> bool:
+    """Return True when an error message indicates quota/rate limiting."""
+    text = (message or "").lower()
+    phrases = (
+        "hit your limit",
+        "rate limit",
+        "rate-limit",
+        "rate_limit",
+        "quota exceeded",
+        "quota",
+        "too many requests",
+        "usage limit",
+    )
+    return any(phrase in text for phrase in phrases)
 
 
 def archive(model, archive_dir, call_num, label, prompt, system_prompt,
