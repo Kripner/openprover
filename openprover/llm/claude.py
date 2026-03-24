@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from ._base import Interrupted, archive
+from ._base import Interrupted, QuotaExceeded, archive, is_quota_exceeded_error
 
 logger = logging.getLogger("openprover.llm")
 
@@ -172,6 +172,10 @@ class LLMClient:
             if self._interrupted.is_set():
                 logger.info("[%s] interrupted after %dms", label, elapsed_ms)
                 raise Interrupted()
+            if is_quota_exceeded_error(stderr):
+                raise QuotaExceeded(
+                    f"Claude CLI failed (exit {proc.returncode}): {stderr[:500]}"
+                )
             raise RuntimeError(f"Claude CLI failed (exit {proc.returncode}): {stderr[:500]}")
 
         try:
@@ -207,6 +211,8 @@ class LLMClient:
                 }
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           raw, subtype, elapsed_ms, archive_path)
+            if is_quota_exceeded_error(err):
+                raise QuotaExceeded(f"Claude CLI error: {err}")
             raise RuntimeError(f"Claude CLI error: {subtype}")
 
         # When using --json-schema, structured output is in 'structured_output'
@@ -432,6 +438,8 @@ class LLMClient:
             stderr = proc.stderr.read()
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           None, stderr, elapsed_ms, archive_path)
+            if is_quota_exceeded_error(stderr):
+                raise QuotaExceeded(f"No result from streaming call: {stderr[:500]}")
             raise RuntimeError(f"No result from streaming call: {stderr[:500]}")
 
         subtype = result_data.get("subtype", "")
@@ -460,6 +468,8 @@ class LLMClient:
                 }
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           result_data, err, elapsed_ms, archive_path)
+            if is_quota_exceeded_error(err):
+                raise QuotaExceeded(f"Claude CLI streaming error: {err[:500]}")
             raise RuntimeError(f"Claude CLI streaming error: {err[:500]}")
 
         cost = result_data.get("total_cost_usd", 0.0)
