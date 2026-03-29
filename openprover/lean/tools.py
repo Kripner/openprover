@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 
-from .core import LeanWorkDir, lean_has_errors, merge_lean_imports, run_lean_check
+from .core import LeanWorkDir, lean_has_errors, merge_lean_imports, run_lean_check, strip_code_fences
 
 logger = logging.getLogger("openprover.lean")
 
@@ -91,7 +91,7 @@ def _tool_lean_verify(
     lean_project_dir,
 ) -> tuple[str, str]:
     """Verify Lean code via lean_check."""
-    code = args.get("code", "")
+    code = strip_code_fences(args.get("code", ""))
     if not code:
         return ("No code provided", "error")
     if not lean_work_dir:
@@ -115,6 +115,11 @@ def _tool_lean_verify(
             status = "error"
         elif "sorry" in feedback.lower():
             status = "partial"
+            feedback += (
+                "\n\nNote: code contains sorry — this means the proof has gaps. "
+                "lean_store will REJECT code with sorry. You must fill ALL sorry "
+                "holes with actual proof terms before storing."
+            )
         else:
             # Warnings only, no errors - treat as success
             status = "ok"
@@ -130,7 +135,7 @@ def _tool_lean_store(
     lean_project_dir,
 ) -> tuple[str, str]:
     """Store a verified Lean snippet into the worker's persistent prefix."""
-    code = args.get("code", "")
+    code = strip_code_fences(args.get("code", ""))
     if not code:
         return ("No code provided", "error")
     if not lean_work_dir:
@@ -175,7 +180,10 @@ def _tool_lean_search(
     try:
         t0 = time.time()
         response = asyncio.run(
-            lean_explore_service.search(query, limit=10, rerank_top=rerank)
+            lean_explore_service.search(
+                query, limit=10, rerank_top=rerank,
+                packages=["Mathlib", "Batteries", "Init", "Lean", "Std"],
+            )
         )
         elapsed = time.time() - t0
         results = response.results

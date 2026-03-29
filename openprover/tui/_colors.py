@@ -23,7 +23,6 @@ ACTION_STYLE = {
     "read_theorem": CYAN,
     "submit_proof": GREEN,
     "submit_lean_proof": GREEN,
-    "give_up": RED,
 }
 
 TOOL_STYLE = {

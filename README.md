@@ -25,6 +25,7 @@ Modes:
 - Python 3.10+
 - **Claude** (default): [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` command on PATH)
 - **Codex** (alternative): [Codex CLI](https://developers.openai.com/codex/cli/) (`codex` command on PATH)
+- **Leanstral** (alternative): Mistral's Lean-specialized model; requires `MISTRAL_API_KEY` (get one at https://console.mistral.ai/)
 - **Local models** (alternative): any OpenAI-compatible server such as [vLLM](https://github.com/vllm-project/vllm); pass `--provider-url` to point at it
 
 ## Install
@@ -137,21 +138,22 @@ openprover --theorem examples/addition.md \
 Built-in model aliases:
 - `sonnet`, `opus`: Claude CLI backends
 - `codex`: Codex CLI backend using the local Codex CLI default model
+- `leanstral`: Mistral's Lean-specialized backend
 - `minimax-m2.5`: local OpenAI-compatible/vLLM backend
 
 For Codex-specific model names such as `gpt-5.4` or `gpt-5.2`, use `--provider codex --model <name>` or the shorthand `--model codex:<name>`.
 
 Reasoning effort:
 - Default is `high` for Claude and Codex
-- Local OpenAI-compatible models default to no reasoning-effort flag
+- Mistral and local OpenAI-compatible models default to no reasoning-effort flag
 - Claude supports `low`, `medium`, `high`, `max`
 - Codex supports `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
-- Local OpenAI-compatible models do not currently support `--reasoning-effort` in OpenProver
+- Mistral and local OpenAI-compatible models do not currently support `--reasoning-effort` in OpenProver
 
 Codex CLI notes:
-- `codex exec --json` only yields the final assistant message, so OpenProver cannot stream partial Codex text into the TUI
-- Codex soft interrupt is advisory: it lets the current response finish so the final answer is preserved
-- Cost is estimated from token usage for known explicit GPT-5/Codex model ids; the bare `codex` alias and unknown model names still show `$0.0000`
+- OpenProver uses `codex app-server`, so Codex text and reasoning stream into the TUI as they arrive
+- Codex soft interrupt requests turn interruption and preserves partial output when the server returns an interrupted turn
+- Cost reporting is currently `0.0` for Codex app-server calls because usage/cost metadata is not surfaced through this integration yet
 
 ### TUI controls
 

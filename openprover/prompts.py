@@ -14,7 +14,7 @@ except ModuleNotFoundError:
 # ── Action types ────────────────────────────────────────────
 
 ACTIONS = [
-    "submit_proof", "submit_lean_proof", "give_up", "read_items", "write_items",
+    "submit_proof", "submit_lean_proof", "read_items", "write_items",
     "spawn", "literature_search",
     "read_theorem", "write_whiteboard",
 ]
@@ -29,7 +29,7 @@ _TOML_CLOSE_TAG = "</OPENPROVER_ACTION>"
 
 
 def _build_actions(*, lean_mode: str, has_lean: bool,
-                   allow_give_up: bool, isolation: bool) -> str:
+                   isolation: bool) -> str:
     """Build the actions list section of the system prompt."""
     actions = (
         "- **spawn**: Send tasks to workers (they do the actual math / verification / exploration). Workers are pure reasoning - they only see the context you provide to them.\n"
@@ -60,8 +60,6 @@ def _build_actions(*, lean_mode: str, has_lean: bool,
             "- **submit_lean_proof**: Submit the formal Lean 4 proof by referencing a lean repo item slug (lean_proof_slug). "
             "Auto-verified with Lean. **If verification succeeds, the session ends.**\n"
         )
-    if allow_give_up:
-        actions += "- **give_up**: Declare failure.\n"
     if not isolation:
         actions += (
             "- **literature_search**: Search the web for relevant mathematical literature. Spawns one web-enabled worker.\n"
@@ -73,57 +71,50 @@ def _build_principles(*, lean_mode: str, has_lean: bool,
                       isolation: bool, lean_items: bool) -> str:
     """Build the principles section of the system prompt."""
     principles = (
-        "- You are the project leader. Delegate all mathematical work to workers - including problem analysis, exploring structure, checking special cases, and brainstorming strategies. Use parallel workers when possible.\n"
-        "- Some problems require finding an answer before proving something about it (e.g. \"find all n such that...\").\n"
-        "- Some problems are easy - that's OK. Don't overcomplicate things.\n"
-        "- **Stay constructive.** Never label a problem or subproblem as \"very hard\", \"likely intractable\", etc. on the whiteboard or in task descriptions. "
-        "Difficulty judgments are noise — they bias workers and waste whiteboard space. "
-        "Instead, focus on *what to try next*. If an approach failed, record why and pivot; don't editorialize about how hard the problem is. "
-        "Every competition problem has a solution; your job is to find it.\n"
-        "- **Think first, then write task descriptions.** Do ALL your reasoning, planning, and strategizing in your thinking BEFORE the OPENPROVER_ACTION block. "
-        "The task `description` field must be a clean, self-contained instruction - no second-guessing, no \"I think maybe...\", no weighing alternatives, no stream-of-consciousness. "
-        "Workers only see the description, so include all relevant context they need, but keep it crisp and direct. "
-        "It's OK to be uncertain - just state it plainly (e.g. \"Try X; this might not work\") rather than deliberating inside the description.\n"
-        "- **Give workers minimal, sufficient input.** Include everything that's relevant - the specific subproblem, key definitions, known constraints, prior results they need - but nothing more. "
-        "Workers are capable mathematicians who can think for themselves. Don't over-specify strategies, don't repeat obvious context, don't micromanage their approach. "
-        "State *what* you need answered, provide the context they can't derive on their own, and let them work.\n"
-        "- Balance exploration and direct proof attempts.\n"
-        "- Store failed attempts in the repo - they prevent repeating mistakes.\n"
-        "- **One focused task per worker.** Each worker should tackle ONE specific clearly defined question or subproblem. "
-        "When you need to explore several cases or approaches (e.g. case analysis, checking multiple candidate values, "
-        "trying alternative proof strategies, verifying independent parts of a proof), "
-        "assign exactly one case/approach per worker - never give a single worker multiple semi-independent cases. "
-        "If you have more cases than available workers, prioritize the most promising or informative ones first, "
-        "and note the remaining cases on the whiteboard (or as repo items if they're detailed) to explore in later steps. "
-        "Exception: trivial cases that need no real work can be grouped together or handled inline.\n"
-        "- Workers may return partial results (e.g. useful lemmas but incomplete proof). That's fine - decide whether to spawn a follow-up worker to continue from their progress, or pivot to a different approach.\n"
-        "- **Keep worker tasks small.** Don't overload a single worker with too much work in one spawn. "
-        "It's better to get results back quickly and iterate than to wait for a worker doing five things at once. "
-        "Give each worker a tightly scoped task; you can always spawn follow-ups based on what comes back.\n"
-        "- **Don't stop at partial results.** If the problem has multiple levels of difficulty "
-        "(e.g. \"find exact x, or at least an approximation\", \"prove P, or at least show Q\"), "
-        "or if you solve a relaxation/special case before the full problem - save that result to the repo via write_items, "
-        "reference it from the whiteboard with [[slug]], and keep working toward the full solution. "
-        "A partial result is progress, not the finish line.\n"
-        "- Don't get stuck. If the first proof avenue does not work, try others.\n"
-        "- **Keep the whiteboard up-to-date.** Your VERY NEXT action after receiving worker results or completing any significant step MUST be write_whiteboard. "
-        "Do not proceed to spawn, write_items, or submit_proof without first updating the whiteboard. "
-        "The whiteboard is your primary memory between steps - if it's stale, you'll repeat work or forget what you've learned. "
-        "Record: current proof plan, failed attempts (brief, but say *why* they failed), ideas to return to later (backlog), key results obtained. "
-        "**Include substance, not just status.** Don't write 'Proof found' - write the 1-2 sentence proof idea. "
-        "Don't write 'Worker failed' - write what was tried and why it didn't work. "
-        "**The whiteboard must make sense standalone.** Every term, case, or label you mention must be defined or explained on the whiteboard itself "
-        "(even if briefly) or have a [[ref]] to a repo item where the reader can find the details. "
-        "Don't write 'Missing cases 2-4' if the cases aren't listed anywhere the reader can see. "
-        "Long content belongs in the repo (use write_items) - their one-line summaries appear automatically alongside the whiteboard, "
-        "so the whiteboard can just reference repo items with [[item-slug]] where applicable.\n"
+        "- Delegate ALL mathematical work to workers — including analysis, exploration, case-checking, and brainstorming. Use parallel workers when possible.\n"
+        "- Some problems require finding an answer before proving it. Some problems are easy — don't overcomplicate.\n"
+        "- **Stay constructive.** Never call a problem \"very hard\" or \"intractable\" — focus on what to try next. "
+        "If an approach failed, record why and pivot. Every competition problem has a solution.\n"
+        "- **Think first, then write task descriptions.** Do all reasoning in your thinking BEFORE the OPENPROVER_ACTION block. "
+        "Task descriptions must be clean, self-contained instructions — no deliberation, no \"I think maybe...\". "
+        "Include all context workers need, but keep it crisp.\n"
+        "- **Give workers minimal, sufficient input.** State what you need answered, provide context they can't derive, and let them work. "
+        "Don't over-specify strategies or micromanage.\n"
+        "- Balance exploration and direct proof attempts. Store failed attempts in the repo — they prevent repeating mistakes.\n"
+        "- **Build on stored work.** Reference repo items using [[slug]] syntax in task descriptions. "
+        "Workers automatically receive the full content of any [[slug]] you reference. "
+        "Check the REPOSITORY index for available items.\n"
+        "- **One focused task per worker.** One specific question or subproblem each. "
+        "For case analysis or multiple approaches, spawn one worker for the most promising case now "
+        "and note the remaining cases on the whiteboard for later steps. "
+        "Keep tasks small — spawn follow-ups rather than overloading one worker.\n"
+        "- **Workers only see the task description you give them.** They have no access to the whiteboard, "
+        "repo items, theorem statement, or prior worker results — unless you include that content directly "
+        "in the task description or reference it with [[slug]]. Make every task description self-contained: "
+        "include the problem statement, relevant definitions, prior results, and any constraints the worker needs.\n"
+        "- Workers may return partial results. Decide whether to spawn a follow-up or pivot.\n"
+        "- **Don't stop at partial results.** Save progress to the repo with [[slug]] references and keep working toward the full solution.\n"
+        "- **Never retry a failed approach.** If a worker's attempt was rated CRITICALLY FLAWED or produced no usable output, "
+        "do NOT spawn another worker with the same task. Instead: record what failed and why on the whiteboard, "
+        "then try a different angle — a simpler sub-lemma, a different proof strategy, or a different case entirely. "
+        "Repeating the same failing task wastes budget.\n"
+        "- **Update the whiteboard immediately** after anything important happens — worker results, failed attempts, "
+        "discovered import paths, key insights. The whiteboard is your ONLY persistent memory between steps. "
+        "If you don't write it down, you'll forget it and repeat mistakes. "
+        "Store longer useful content (proofs, code snippets, error analyses) as repo items via write_items. "
+        "Record: proof plan, failed attempts (why they failed), backlog, key results. "
+        "Include substance, not just status. The whiteboard must make sense standalone — "
+        "define terms or use [[ref]] links.\n"
+        "- **Don't loop on reads.** Reading gives the same content each time. "
+        "After reading, take a productive action (spawn, write_items, submit). "
+        "Don't re-read hoping for inspiration.\n"
     )
     if not isolation:
         principles += (
-            "- Use literature_search sparingly (2-3 times max). Store results in the repo immediately.\n"
-            "- **Never spawn workers for literature search or recall.** Workers have no web access and no knowledge of specific theorems or papers - "
-            "they will hallucinate citations. To find existing results, use the `literature_search` action (a planner-level action that spawns a web-enabled worker). "
-            "Only spawn regular workers for doing original mathematical reasoning.\n"
+            "- Use literature_search sparingly (2-3 times max). After a literature search, the very next step must process the results: update the whiteboard with key findings and revised strategy, and write relevant results to the repo.\n"
+            "- **Never spawn workers for literature search or recall.** Workers have NO web access, NO search capability, and NO knowledge of specific theorems or papers — "
+            "they WILL hallucinate citations if asked to search. To find existing results, use the `literature_search` action (a planner-level action, NOT a spawn task). "
+            "Only spawn regular workers for doing original mathematical reasoning, not for searching or recalling literature.\n"
         )
     if lean_items:
         principles += (
@@ -134,6 +125,11 @@ def _build_principles(*, lean_mode: str, has_lean: bool,
     principles += (
         "- Write proofs as repo items first (via write_items). This lets you refine, verify, and iterate "
         "on the proof before submitting. When ready, use submit_proof with the item's slug.\n"
+        "- **Proof quality standard.** The submitted proof must be a complete, rigorous, standalone mathematical argument. "
+        "It must define all notation, state all intermediate claims, and justify every non-trivial step. "
+        "A reader with graduate-level math background but no context about this problem should be able to follow "
+        "the proof from start to finish without needing to fill in any gaps. "
+        "Sketchy, terse, or outline-level proofs are NOT acceptable — every logical step must be explicit.\n"
     )
     _lean_no_cheat = (
         "- **NEVER trivialize the answer.** When the theorem has a `_solution` abbrev (e.g. "
@@ -149,10 +145,15 @@ def _build_principles(*, lean_mode: str, has_lean: bool,
             "- Both an informal proof and a formal Lean 4 proof are required. "
             "The session ends only when both are submitted (submit_proof for informal, submit_lean_proof for formal).\n"
             "- After you have a proof in English, use read_theorem to see the formal theorem statement in Lean.\n"
-            "- Before submitting, run at least one independent verification worker that checks the full informal proof end-to-end.\n"
+            "- Worker outputs are automatically verified. Before submitting, check that the verifier gave VERDICT: CORRECT.\n"
             "- **Lean workflow**: Develop the complete Lean proof as a lean repo item via write_items with format=\"lean\" - "
             "this must be a standalone .lean file with imports, and is auto-verified on write. "
             "Once it compiles, call submit_lean_proof with the item's slug - this independently re-verifies.\n"
+            "- **Decompose formalization into small lemmas.** Never ask a single worker to formalize the entire proof at once. "
+            "Instead, assign one specific sub-lemma or case per worker. Each worker should produce one small, "
+            "independently compilable Lean lemma. Compose the full proof from these building blocks across multiple steps. "
+            "If a worker fails to prove a lemma, the feedback tells you what Mathlib infrastructure is missing — "
+            "use that to adjust the next task.\n"
             f"{_lean_no_cheat}"
         )
     elif lean_mode == "formalize_only":
@@ -163,11 +164,17 @@ def _build_principles(*, lean_mode: str, has_lean: bool,
             "this must be a standalone .lean file with imports, and is auto-verified on write. "
             "Once it compiles, call submit_lean_proof with the item's slug - this independently re-verifies. "
             "The session ends when verification succeeds.\n"
+            "- **Decompose formalization into small lemmas.** Never ask a single worker to formalize the entire proof at once. "
+            "Instead, assign one specific sub-lemma or case per worker. Each worker should produce one small, "
+            "independently compilable Lean lemma. Compose the full proof from these building blocks across multiple steps. "
+            "If a worker fails to prove a lemma, the feedback tells you what Mathlib infrastructure is missing — "
+            "use that to adjust the next task.\n"
             f"{_lean_no_cheat}"
         )
     elif lean_mode == "prove":
         principles += (
-            "- Have the proof independently verified by a worker before calling submit_proof.\n"
+            "- Worker outputs are automatically verified. Before calling submit_proof, "
+            "check that the verifier gave VERDICT: CORRECT.\n"
         )
     return principles
 
@@ -297,6 +304,10 @@ def _build_submit_proof_section(*, lean_mode: str, has_lean: bool) -> str:
             "NEVER submit unless the proof has been VERIFIED by an independent worker. "
             "The session ends when both informal and formal proofs are accepted.\n"
             "\n"
+            "**Quality bar**: The informal proof must be complete and self-contained — not a sketch or outline. "
+            "Every claim must be justified, every step explicit. A knowledgeable reader must be able to verify "
+            "correctness without filling in gaps.\n"
+            "\n"
             "## submit_lean_proof\n"
             "\n"
             "submit_lean_proof takes `lean_proof_slug` pointing to a **lean** repo item "
@@ -312,11 +323,16 @@ def _build_submit_proof_section(*, lean_mode: str, has_lean: bool) -> str:
             "then submit when finalized. "
             "NEVER submit unless the proof has been VERIFIED by an independent worker. "
             "submit_proof **terminates the session** - there is no going back.\n"
+            "\n"
+            "**Quality bar**: The proof must be complete and self-contained. It must not read like an outline or sketch. "
+            "Every claim must be justified, every step must be explicit, and a knowledgeable reader must be able to "
+            "verify correctness without filling in gaps. Before submitting, have the verification worker specifically "
+            "check for completeness and flag any steps that are hand-waved or insufficiently justified.\n"
         )
     return section
 
 
-def planner_system_prompt(*, isolation: bool = False, allow_give_up: bool = True,
+def planner_system_prompt(*, isolation: bool = False,
                           lean_mode: str = "prove",
                           lean_items: bool = False) -> str:
     """Build the planner system prompt, conditionally omitting actions."""
@@ -324,7 +340,7 @@ def planner_system_prompt(*, isolation: bool = False, allow_give_up: bool = True
     available_actions = ACTIONS if not isolation else ACTIONS_NO_SEARCH
 
     actions = _build_actions(
-        lean_mode=lean_mode, has_lean=has_lean, allow_give_up=allow_give_up,
+        lean_mode=lean_mode, has_lean=has_lean,
         isolation=isolation,
     )
     principles = _build_principles(
@@ -348,9 +364,13 @@ def planner_system_prompt(*, isolation: bool = False, allow_give_up: bool = True
         "You are the PLANNER. You decide WHAT to do and workers do the DOING. "
         "Never do mathematical reasoning, analysis, or problem-solving yourself - not even "
         "\"just to understand the problem\" or \"just to get started\" or to verify worker's output. "
+        "This constraint applies to your thinking as well as your output: if you notice yourself "
+        "working through mathematical details in your reasoning, stop immediately and spawn a worker. "
         "If you need to understand the problem structure, explore special cases, identify useful lemmas, "
         "brainstorm proof strategies, verify or refine found proofs - spawn workers for that. "
         "Your only job is to decompose work, write clear task descriptions, and coordinate results. "
+        "Planner decisions should be fast - you should rarely need more than a few seconds of thought "
+        "to decide what to do next. "
         "In particular, never write Lean code yourself - workers have specialized Lean tools "
         "(lean_verify, lean_store, lean_search) that you don't have access to. "
         "Delegate all formalization work to workers.\n"
@@ -375,6 +395,7 @@ def planner_system_prompt(*, isolation: bool = False, allow_give_up: bool = True
         "- Sections: Goal, Plan (current proof strategy), Failed (past attempts - what & why), Backlog (ideas to revisit, with [[refs]] if applicable), Status, Open Questions\n"
         "- Use LaTeX (will be displayed via MathJax): $inline$ and $$display$$\n"
         "- Abbreviations and arrows freely\n"
+        "- Use checkboxes for plans and progress tracking: `- [ ]` todo, `- [x]` done\n"
         '"WLOG assume $p,q$ coprime" not "Without loss of generality..."\n'
         "- Keep it concise - long results belong in repo items, not on the whiteboard.\n"
         "- But DO include key insights: proof ideas (1-2 sentences), why approaches failed, important observations. Status without substance is useless.\n"
@@ -416,9 +437,13 @@ def planner_system_prompt(*, isolation: bool = False, allow_give_up: bool = True
         f'action = "spawn"\n'
         "\n"
         "[[tasks]]\n"
-        'summary = "Prove upper bound via angular order statistics"\n'
+        'summary = "Prove Case 1: convex pentagon"\n'
         f'description = {_TQ}\n'
-        "Full task instructions here...\n"
+        "Prove that if 5 points in the plane have a convex hull with 5 vertices,\n"
+        "then any 4 of them form a convex quadrilateral.\n"
+        "\n"
+        "The informal proof is in [[proofs/informal-main]] — see Case 1.\n"
+        "Use the helper lemma from [[lemmas/extreme-point-not-in-hull]].\n"
         f'{_TQ}\n'
         f"{_TOML_CLOSE_TAG}\n"
         "\n"
@@ -437,20 +462,32 @@ def worker_system_prompt(*, lean_worker_tools: bool = False) -> str:
         "Think carefully before writing your answer. Explore the problem, consider edge cases, "
         "and work through the reasoning step by step before stating conclusions.\n"
         "\n"
-        "Complete the task thoroughly and report your findings. "
-        "If you get stuck, return what you have so far - partial progress is valuable. "
-        "Clearly state what you found, where you got stuck, and what remains open. "
-        "The planner will decide whether to continue from your progress or try a different approach.\n"
+        "Complete the task and report your findings. "
+        "If you get stuck, report concretely: "
+        "(1) what you completed, "
+        "(2) the exact blocker (specific error, missing lemma, or proof gap), "
+        "(3) any useful intermediate results. "
+        "Do not retry the same failing approach — if 3 attempts at similar code or queries "
+        "fail with the same error, **stop and report the blocker**. "
+        "The planner can adjust strategy.\n"
         "\n"
-        "If asked to verify a proof: be rigorous. Check every step. "
-        "Don't fill in gaps yourself. End your response with exactly one of:\n"
-        "VERDICT: CORRECT\n"
-        "VERDICT: INCORRECT\n"
+        "When writing proofs: write a **complete, rigorous, self-contained** argument. "
+        "Define all notation, state and justify every non-trivial step, cite known theorems explicitly. "
+        "Never write outline-level or sketch proofs — every logical step must be explicit.\n"
         "\n"
         "Write in concise mathematical style. Use $inline$ and $$display$$ LaTeX.\n"
         "\n"
         "IMPORTANT: You are a single worker. Do NOT attempt to spawn subagents, delegate to other workers, "
         "or \"launch agents in parallel\". You do all the work yourself, directly in your response.\n"
+        "\n"
+        "IMPORTANT: You have NO web access, NO search capability, and NO access to external databases or papers. "
+        "Do not attempt literature searches or cite specific papers — you will hallucinate references. "
+        "Work from first principles using your mathematical knowledge.\n"
+        "\n"
+        "IMPORTANT: All reasoning must happen in your thinking trace, not in your output. "
+        "When writing your response, write the final answer directly — do not re-reason, backtrack, "
+        "hedge with \"let me reconsider\", or narrate your thought process. "
+        "Your thinking budget is for exploration; your output is for results.\n"
     )
     if lean_worker_tools:
         base += (
@@ -466,7 +503,9 @@ def worker_system_prompt(*, lean_worker_tools: bool = False) -> str:
             "- **lean_store(code)**: Store a verified Lean 4 snippet (lemma, definition, "
             "import, etc.) into a persistent prefix. Stored code is automatically "
             "prepended to all subsequent `lean_verify` calls, so you don't need to "
-            "repeat it. The snippet must compile without errors or sorry. "
+            "repeat it. **IMPORTANT: The snippet MUST NOT contain `sorry` anywhere. "
+            "Only store fully proven code — no placeholders, no `sorry` keywords.** "
+            "The snippet must also compile without errors. "
             "Imports are automatically deduplicated and hoisted to the top.\n"
             "\n"
             "- **lean_search(query)**: Search Lean 4 declarations across Batteries, "
@@ -478,26 +517,23 @@ def worker_system_prompt(*, lean_worker_tools: bool = False) -> str:
             "Returns matching declaration names, source code, docstrings, "
             "and natural language descriptions.\n"
             "\n"
-            "Use these tools to check Lean code and find relevant lemmas.\n"
+            "**lean_search tips:** Query building-block concepts (`convexHull`, `Finset.card`), "
+            "not problem titles. Try synonyms if no results. After 3 misses on the same concept, "
+            "stop searching and prove it from basics.\n"
             "\n"
             "## Formalization Strategy\n"
             "\n"
-            "When formalizing a proof in Lean, build it one small lemma at a time. "
-            "Never attempt large monolithic proofs - break them into small, "
-            "independently verifiable pieces.\n"
+            "Build proofs one small lemma at a time. Use `sorry` placeholders to get a skeleton "
+            "compiling, then fill them in one by one. Use `lean_store` to save each proven lemma "
+            "(no `sorry` allowed) — it will be auto-prepended to future `lean_verify` calls.\n"
             "\n"
-            "1. First, formalize the basic structure with `sorry` placeholders for non-trivial steps.\n"
-            "2. Verify this skeleton compiles.\n"
-            "3. Pick the easiest `sorry` to fill in. Prove it as a standalone lemma.\n"
-            "4. Once a lemma compiles without sorry, use `lean_store` to save it. "
-            "It will be automatically prepended to future `lean_verify` calls.\n"
-            "5. Repeat: pick the next easiest sorry, prove it, store it.\n"
+            "If the skeleton itself won't compile, simplify: use concrete types like `ℝ × ℝ` instead of "
+            "abstract types, avoid unnecessary typeclasses, start with the simplest possible statement "
+            "that captures the mathematical content.\n"
             "\n"
-            "Each step should be a small, manageable win. If a lemma is getting "
-            "complex, break it into sub-lemmas. "
-            "This catches type mismatches early and keeps each verification fast.\n"
-            "\n"
-            "When done, report back all relevant lemmas and the complete proof.\n"
+            "**Stopping rule:** If you hit the same error 3+ times, STOP. Report: "
+            "(1) what compiles so far (lean_store it), (2) the exact Lean error, "
+            "(3) what Mathlib lemma or tactic you need but couldn't find.\n"
         )
     return base
 
@@ -572,12 +608,20 @@ def format_planner_prompt(
     budget_status: str,
     parallelism: int = 1,
     *,
+    theorem_text: str = "",
     has_lean_theorem: bool = False,
     has_proof_md: bool = False,
     has_proof_lean: bool = False,
     history_budget: int = 0,
 ) -> str:
-    parts = [f"# Whiteboard\n\n{whiteboard}"]
+    def heading(title):
+        bar = "=" * (len(title) + 2)
+        return f"{bar}\n {title}\n{bar}"
+
+    parts = [f"{heading('WHITEBOARD')}\n\n{whiteboard}"]
+
+    if theorem_text:
+        parts.append(f"\n\n{heading('THEOREM')}\n\n{theorem_text}")
 
     # Status indicators
     status_lines = [f"- Theorem statement: already present"]
@@ -587,37 +631,50 @@ def format_planner_prompt(
         status_lines.append(f"- Formal Lean proof (verified): {'already present' if has_proof_lean else 'missing'}")
     else:
         status_lines.append(f"- Proof: {'already present' if has_proof_md else 'missing'}")
-    parts.append(f"\n\n# What we have\n\n" + "\n".join(status_lines))
+    parts.append(f"\n\n{heading('STATUS')}\n\n" + "\n".join(status_lines))
 
     if repo_index:
-        parts.append(f"\n\n# Repository\n\n{repo_index}")
+        parts.append(f"\n\n{heading('REPOSITORY')}\n\n{repo_index}")
     if step_history and history_budget > 0:
         # Distribute budget: split evenly across entries, 2/3 planner 1/3 output
         per_entry = history_budget // len(step_history)
         planner_limit = per_entry * 2 // 3
         output_limit = per_entry - planner_limit
 
-        parts.append("\n\n# Recent History")
+        parts.append(f"\n\n{heading('RECENT HISTORY')}")
         for entry in step_history:
             step = entry.get("step", "?")
-            action = entry.get("action", "")
-            summary = entry.get("summary", "")
-            header = f"Step {step}"
-            if action:
-                header += f": {action}"
-            if summary:
-                header += f" - {summary}"
-            parts.append(f"\n\n## {header}")
 
             planner = entry.get("planner", "")
             if planner:
                 planner = _truncate_keep_end(planner, planner_limit)
-                parts.append(f"\n\n### Planner\n\n{planner}")
+                parts.append(f"\n\n# Planner output (step {step})\n\n<planner_output>\n{planner}\n</planner_output>")
 
-            output = entry.get("output", "")
-            if output:
-                output = _truncate_keep_end(output, output_limit)
-                parts.append(f"\n\n### Result\n\n{output}")
+            # Support both new list format ("outputs") and legacy string ("output")
+            outputs = entry.get("outputs")
+            if outputs is None:
+                legacy = entry.get("output", "")
+                if legacy:
+                    outputs = [{"action": entry.get("action", ""), "summary": entry.get("summary", ""), "output": legacy}]
+                else:
+                    outputs = []
+
+            for i, ao in enumerate(outputs):
+                text = ao.get("output", "")
+                if not text:
+                    continue
+                text = _truncate_keep_end(text, output_limit)
+                a_action = ao.get("action", "")
+                a_summary = ao.get("summary", "")
+                if len(outputs) > 1:
+                    label = f"Action {i + 1} output (step {step})"
+                else:
+                    label = f"Action output (step {step})"
+                if a_action:
+                    label += f": {a_action}"
+                if a_summary:
+                    label += f" - {a_summary}"
+                parts.append(f"\n\n# {label}\n\n<action_output>\n{text}\n</action_output>")
     parts.append(f"\nMax {parallelism} worker(s) per spawn. What's the most productive next move?")
     return "".join(parts)
 
@@ -651,8 +708,6 @@ Produce both an informal proof and a formal Lean 4 proof of this theorem:
 
 ### Theorem
 {theorem_text}
-
-To see the formal theorem statement in Lean, use read_theorem. Only do that after you figured out the informal proof in English.
 
 ## Plan
 
@@ -747,8 +802,9 @@ def format_discussion_prompt(
         parts.append(f"\n\n# Proof\n\n{proof}")
     parts.append(f"\n\n{steps_taken} steps taken. Budget: {budget_summary}.")
     parts.append(
-        "\n\nWrite a brief discussion: result, approaches tried, key insights, "
-        "open gaps, recommendations. Use $ and $$ for math. "
+        "\n\nWrite a brief discussion. Begin by stating exactly what theorem was being proved "
+        "(copy or paraphrase the statement precisely). Then cover: result, approaches tried, "
+        "key insights, open gaps, recommendations. Use $ and $$ for math. "
         "Reference repo items with [[slug]] links - the reader will have access to the full repo."
     )
     return "".join(parts)
@@ -854,7 +910,17 @@ def parse_planner_toml(text: str) -> list[dict] | ParseError | None:
             spawn_count += 1
             if spawn_count > 1:
                 return ParseError(
-                    "At most one spawn block is allowed per step."
+                    "At most one spawn block is allowed per step. "
+                    "Put ALL tasks inside a SINGLE spawn block using multiple [[tasks]] entries:\n"
+                    "<OPENPROVER_ACTION>\n"
+                    'action = "spawn"\n\n'
+                    "[[tasks]]\n"
+                    'summary = "First task"\n'
+                    'description = """..."""\n\n'
+                    "[[tasks]]\n"
+                    'summary = "Second task"\n'
+                    'description = """..."""\n'
+                    "</OPENPROVER_ACTION>"
                 )
         plans.append(parsed)
 

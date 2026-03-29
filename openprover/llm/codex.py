@@ -1,79 +1,23 @@
-"""OpenAI Codex CLI client for OpenProver."""
+"""Codex app-server client for OpenProver."""
 
 import json
 import logging
 import os
+import random
 import re
-import shutil
+import select
 import subprocess
-import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
 
-from ._base import (
-    Interrupted,
-    QuotaExceeded,
-    archive,
-    is_quota_exceeded_error,
-    kill_process_tree,
-)
+from ._base import Interrupted, QuotaExceeded, archive, is_quota_exceeded_error
 
 logger = logging.getLogger("openprover.llm")
 
 
 _FALLBACK_CONTEXT_LENGTH = 200_000
 _GPT5_CONTEXT_LENGTH = 400_000
-_CODEX_PRICING_USD_PER_MILLION: list[tuple[str, tuple[float, float, float]]] = [
-    ("gpt-5.2-codex", (1.75, 0.175, 14.0)),
-    ("gpt-5.2", (1.75, 0.175, 14.0)),
-    ("gpt-5.1-codex-mini", (0.25, 0.025, 2.0)),
-    ("gpt-5-mini", (0.25, 0.025, 2.0)),
-    ("gpt-5.1-codex-max", (1.25, 0.125, 10.0)),
-    ("gpt-5.1-codex", (1.25, 0.125, 10.0)),
-    ("gpt-5-codex", (1.25, 0.125, 10.0)),
-    ("gpt-5.1", (1.25, 0.125, 10.0)),
-    ("gpt-5", (1.25, 0.125, 10.0)),
-]
-
-
-def _compose_prompt(system_prompt: str, prompt: str) -> str:
-    """Embed the OpenProver system prompt into the stdin prompt for Codex."""
-    if not system_prompt:
-        return prompt
-    payload = {
-        "system_prompt": system_prompt.rstrip(),
-        "user_prompt": prompt,
-    }
-    return (
-        "Treat the following JSON object as the request context.\n"
-        "The `system_prompt` value is higher priority than `user_prompt`.\n\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
-    )
-
-
-def _normalize_item_type(item_type: str) -> str:
-    """Normalize Codex item types to a stable snake_case form."""
-    return item_type.replace("-", "_").replace(" ", "_").lower()
-
-
-def _match_model_prefix(model: str, prefix: str) -> bool:
-    """Match an exact model id or a snapshot/build suffix of that id."""
-    model = model.lower()
-    prefix = prefix.lower()
-    return model == prefix or model.startswith(f"{prefix}-")
-
-
-def _lookup_codex_pricing(model: str) -> tuple[float, float, float] | None:
-    """Return per-1M token pricing for known published Codex/OpenAI models."""
-    if not model:
-        return None
-    normalized = model.lower()
-    for prefix, pricing in _CODEX_PRICING_USD_PER_MILLION:
-        if _match_model_prefix(normalized, prefix):
-            return pricing
-    return None
 
 
 def _infer_context_length(model: str) -> int:
@@ -83,126 +27,14 @@ def _infer_context_length(model: str) -> int:
     return _FALLBACK_CONTEXT_LENGTH
 
 
-def _estimate_cost_usd(model: str, usage: dict) -> float:
-    """Estimate Codex cost from usage for known published model ids."""
-    pricing = _lookup_codex_pricing(model)
-    if not pricing:
-        return 0.0
-    input_price, cached_input_price, output_price = pricing
-    input_tokens = int(usage.get("input_tokens", 0) or 0)
-    cached_input_tokens = int(usage.get("cached_input_tokens", 0) or 0)
-    output_tokens = int(usage.get("output_tokens", 0) or 0)
-    uncached_input_tokens = max(input_tokens - cached_input_tokens, 0)
-    return (
-        uncached_input_tokens * input_price
-        + cached_input_tokens * cached_input_price
-        + output_tokens * output_price
-    ) / 1_000_000
-
-
-def _find_codex_bin() -> str:
-    """Resolve the Codex executable appropriate for the current platform."""
-    if sys.platform == "win32":
-        candidates = ("codex.cmd", "codex")
-    else:
-        candidates = ("codex", "codex.cmd")
-    for name in candidates:
-        path = shutil.which(name)
-        if path:
-            return path
-    return candidates[0]
-
-
-def _extract_mcp_servers(mcp_config: dict | None) -> dict:
-    """Accept either Claude-style mcpServers or Codex-style mcp_servers."""
-    if not mcp_config:
-        return {}
-    servers = mcp_config.get("mcpServers")
-    if isinstance(servers, dict):
-        return servers
-    servers = mcp_config.get("mcp_servers")
-    if isinstance(servers, dict):
-        return servers
-    return {}
-
-
-def _codex_mcp_overrides(mcp_config: dict | None) -> list[str]:
-    """Convert an MCP config dict into Codex CLI `-c` overrides."""
-    overrides: list[str] = []
-    for name, cfg in sorted(_extract_mcp_servers(mcp_config).items()):
-        if not isinstance(cfg, dict):
-            continue
-        prefix = f"mcp_servers.{name}"
-        if "command" in cfg:
-            overrides.extend(["-c", f"{prefix}.command={json.dumps(str(cfg['command']))}"])
-            args = cfg.get("args") or []
-            overrides.extend(["-c", f"{prefix}.args={json.dumps([str(a) for a in args])}"])
-            env = cfg.get("env") or {}
-            for env_key, env_val in sorted(env.items()):
-                overrides.extend([
-                    "-c",
-                    f"{prefix}.env.{env_key}={json.dumps(str(env_val))}",
-                ])
-        if "url" in cfg:
-            overrides.extend(["-c", f"{prefix}.url={json.dumps(str(cfg['url']))}"])
-        token_env = cfg.get("bearer_token_env_var") or cfg.get("bearerTokenEnvVar")
-        if token_env:
-            overrides.extend([
-                "-c",
-                f"{prefix}.bearer_token_env_var={json.dumps(str(token_env))}",
-            ])
-    return overrides
-
-
-def _extract_tool_result_text(result) -> str:
-    """Extract readable text from a Codex MCP tool result payload."""
-    if result is None:
-        return ""
-    if isinstance(result, str):
-        return result
-    if isinstance(result, dict):
-        content = result.get("content")
-        if isinstance(content, list):
-            parts: list[str] = []
-            for item in content:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("type") == "text" and item.get("text"):
-                    parts.append(str(item["text"]))
-            if parts:
-                return "\n".join(parts)
-        structured = result.get("structured_content")
-        if structured is not None:
-            return json.dumps(structured, ensure_ascii=False)
-    return json.dumps(result, ensure_ascii=False)
-
-
-def _infer_tool_status(name: str, result_text: str, is_error: bool) -> str:
-    """Map MCP tool results onto the statuses the TUI already understands."""
-    if is_error:
-        return "error"
-    if name == "lean_verify":
-        first_line = result_text.split("\n", 1)[0]
-        if "OK" in first_line or result_text.startswith("OK"):
-            return "ok"
-        if re.search(r"^\d+:\d+: error", result_text, re.MULTILINE):
-            return "error"
-        if "sorry" in result_text.lower():
-            return "partial"
-        return "ok"
-    if name == "lean_store":
-        return "ok" if result_text.startswith("OK") else "error"
-    return "ok"
-
-
 class CodexClient:
-    """Calls Codex CLI via `codex exec --json` and archives interactions."""
+    """Calls Codex via the app-server and archives interactions."""
 
     context_length = _FALLBACK_CONTEXT_LENGTH
     supports_mcp_tools = True
 
     def __init__(self, model: str, archive_dir: Path,
-                 max_output_tokens: int = 32_000,
+                 max_output_tokens: int = 128_000,
                  answer_reserve: int = 4096,
                  reasoning_effort: str | None = None):
         self.model = model
@@ -211,42 +43,52 @@ class CodexClient:
         self.total_cost = 0.0
         self.max_output_tokens = max_output_tokens
         self.answer_reserve = answer_reserve
-        self.reasoning_effort = reasoning_effort
+        self.reasoning_effort = reasoning_effort or "high"
         self.context_length = _infer_context_length(model)
         self.mcp_config: dict | None = None
+
+        self._requested_model = model
         self._interrupted = threading.Event()
         self._soft_interrupted = threading.Event()
-        self._active_procs: list[subprocess.Popen] = []
-        self._procs_lock = threading.Lock()
-        self._work_dir = archive_dir.resolve()
-        self._codex_bin = _find_codex_bin()
+        self._proc: subprocess.Popen | None = None
+        self._io_lock = threading.Lock()
+        self._call_lock = threading.Lock()
+        self._request_id = 0
+        self._ignored_response_ids: set[int] = set()
+        self._pending_messages: list[dict] = []
+        self._stdout_buffer = ""
+        self._active_thread_id: str | None = None
+        self._active_turn_id: str | None = None
+        self._stderr_lines: list[str] = []
+        self._stderr_thread: threading.Thread | None = None
+
+        self._start_server()
 
     def interrupt(self):
-        """Signal all active Codex calls to stop."""
+        """Signal the active LLM call to stop."""
         self._interrupted.set()
-        self._kill_active_procs()
+        self._send_turn_interrupt()
 
     def soft_interrupt(self):
-        """Ask active Codex calls to finish the current response if possible.
-
-        Codex JSON mode only emits the assistant message on completion, so
-        killing the process here loses the in-flight answer entirely. A hard
-        interrupt still terminates immediately via interrupt().
-        """
+        """Signal the active LLM call to stop and return partial output."""
         self._soft_interrupted.set()
+        self._send_turn_interrupt()
 
     def cleanup(self):
-        """Kill all active subprocesses. Safe to call multiple times."""
-        self._kill_active_procs()
-
-    def _kill_active_procs(self):
-        with self._procs_lock:
-            for proc in self._active_procs:
-                if proc.poll() is None:
-                    kill_process_tree(proc)
+        """Stop the Codex app-server process if it is running."""
+        proc = self._proc
+        if proc is None:
+            return
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        self._proc = None
 
     def clear_interrupt(self):
-        """Reset the interrupt flag so new calls can proceed."""
+        """Reset interrupt flags so new calls can proceed."""
         self._interrupted.clear()
         self._soft_interrupted.clear()
 
@@ -265,270 +107,1059 @@ class CodexClient:
         archive_path: Path | None = None,
         tool_callback=None,
         tool_start_callback=None,
-        max_tokens: int | None = None,  # currently ignored by Codex CLI
+        max_tokens: int | None = None,
     ) -> dict:
-        """Make a Codex CLI call and archive it."""
+        """Make a Codex call via app-server and archive it."""
+        del json_schema
         del max_tokens
 
-        self.call_count += 1
-        call_num = self.call_count
+        with self._call_lock:
+            self.call_count += 1
+            call_num = self.call_count
+            self._archive(
+                call_num,
+                label,
+                prompt,
+                system_prompt,
+                None,
+                None,
+                None,
+                0,
+                archive_path,
+            )
 
-        self._archive(call_num, label, prompt, system_prompt, json_schema,
-                      None, None, 0, archive_path)
+            if self._interrupted.is_set():
+                self._archive(
+                    call_num,
+                    label,
+                    prompt,
+                    system_prompt,
+                    None,
+                    None,
+                    "interrupted",
+                    0,
+                    archive_path,
+                )
+                raise Interrupted()
 
-        logger.info("[%s] calling codex%s", label,
-                    f" ({self.model})" if self.model else "")
+            self._ensure_server()
+            start = time.time()
+            try:
+                thread_start_params = {
+                    "model": self.model,
+                    "ephemeral": True,
+                    "approvalPolicy": "never",
+                    "developerInstructions": system_prompt,
+                }
+                if web_search:
+                    thread_start_params["config"] = {"web_search": "live"}
+                elif self.mcp_config is not None:
+                    thread_start_params["config"] = self.mcp_config
 
-        if self._interrupted.is_set():
-            self._archive(call_num, label, prompt, system_prompt, json_schema,
-                          None, "interrupted", 0, archive_path)
-            logger.info("[%s] interrupted before call started", label)
-            raise Interrupted()
+                thread_resp = self._rpc_request("thread/start", thread_start_params)
+                thread_id = thread_resp.get("thread", {}).get("id")
+                if not thread_id:
+                    raise RuntimeError(
+                        "Codex app-server thread/start missing thread id"
+                    )
+                self._active_thread_id = thread_id
 
-        composed_prompt = _compose_prompt(system_prompt, prompt)
-        cmd, schema_path = self._build_cmd(
-            web_search=web_search,
-            json_schema=json_schema,
-        )
-        start = time.time()
+                turn_resp = self._rpc_request(
+                    "turn/start",
+                    {
+                        "threadId": thread_id,
+                        "input": [{"type": "text", "text": prompt}],
+                        "approvalPolicy": "never",
+                        "effort": self.reasoning_effort,
+                    },
+                )
+                turn_id = turn_resp.get("turn", {}).get("id")
+                if not turn_id:
+                    raise RuntimeError("Codex app-server turn/start missing turn id")
+                self._active_turn_id = turn_id
 
-        proc = subprocess.Popen(
+                turn_completed, streamed = self._wait_for_turn_completed(
+                    turn_id,
+                    stream_callback=stream_callback,
+                    tool_callback=tool_callback,
+                    tool_start_callback=tool_start_callback,
+                )
+                elapsed_ms = int((time.time() - start) * 1000)
+
+                status = turn_completed.get("turn", {}).get("status")
+                finish_reason = "stop"
+                hard_interrupted = self._interrupted.is_set() or (
+                    status == "interrupted" and not self._soft_interrupted.is_set()
+                )
+                soft_interrupted = (
+                    self._soft_interrupted.is_set()
+                    and not self._interrupted.is_set()
+                    and status == "interrupted"
+                )
+
+                if soft_interrupted:
+                    finish_reason = "soft_interrupted"
+
+                if hard_interrupted and not soft_interrupted:
+                    self._archive(
+                        call_num,
+                        label,
+                        prompt,
+                        system_prompt,
+                        None,
+                        None,
+                        "interrupted",
+                        elapsed_ms,
+                        archive_path,
+                    )
+                    raise Interrupted()
+
+                raw = {
+                    "thread_start": thread_resp,
+                    "turn_start": turn_resp,
+                    "turn_completed": turn_completed,
+                    "stop_reason": finish_reason,
+                    "usage": {},
+                    "total_cost_usd": 0.0,
+                }
+
+                result_text, thinking_text = self._extract_turn_outputs(turn_completed)
+                streamed_result = "".join(streamed["result_parts"]).strip()
+                streamed_thinking = "".join(streamed["thinking_parts"]).strip()
+                if not result_text and streamed_result:
+                    result_text = streamed_result
+                if not thinking_text and streamed_thinking:
+                    thinking_text = streamed_thinking
+
+                self._archive(
+                    call_num,
+                    label,
+                    prompt,
+                    system_prompt,
+                    None,
+                    raw,
+                    None,
+                    elapsed_ms,
+                    archive_path,
+                    thinking=thinking_text,
+                    result_text=result_text,
+                )
+
+                return {
+                    "result": result_text,
+                    "thinking": thinking_text,
+                    "cost": 0.0,
+                    "duration_ms": elapsed_ms,
+                    "raw": raw,
+                    "finish_reason": finish_reason,
+                }
+            except Interrupted:
+                raise
+            except Exception as e:
+                elapsed_ms = int((time.time() - start) * 1000)
+                err = str(e)
+                self._archive(
+                    call_num,
+                    label,
+                    prompt,
+                    system_prompt,
+                    None,
+                    None,
+                    err,
+                    elapsed_ms,
+                    archive_path,
+                )
+                if is_quota_exceeded_error(err):
+                    raise QuotaExceeded(err[:1000])
+                self._active_turn_id = None
+                self._active_thread_id = None
+                raise
+            finally:
+                self._active_turn_id = None
+                self._active_thread_id = None
+
+    def _start_server(self):
+        self.cleanup()
+        cmd = [
+            "codex",
+            "app-server",
+            "--listen",
+            "stdio://",
+            "--session-source",
+            "mcp",
+        ]
+        self._proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            # New session/process group on Unix so kill_process_tree() can
-            # tear down the full Codex subprocess tree. Windows cleanup uses
-            # taskkill /T and does not depend on killpg semantics.
-            start_new_session=True,
         )
-        with self._procs_lock:
-            self._active_procs.append(proc)
+        self._pending_messages.clear()
+        self._ignored_response_ids.clear()
+        self._stdout_buffer = ""
+        self._stderr_lines = []
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
 
-        try:
-            if proc.stdin:
-                proc.stdin.write(composed_prompt)
-                proc.stdin.close()
-            result = self._collect_events(
-                proc=proc,
-                call_num=call_num,
-                label=label,
-                prompt=prompt,
-                system_prompt=system_prompt,
-                json_schema=json_schema,
-                archive_path=archive_path,
-                start=start,
-                stream_callback=stream_callback,
-                tool_callback=tool_callback,
-                tool_start_callback=tool_start_callback,
+        init_resp = self._rpc_request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "openprover_codex",
+                    "title": "OpenProver Codex Client",
+                    "version": "0.1.0",
+                }
+            },
+        )
+        logger.debug("codex initialize ok: %s", bool(init_resp))
+        self._send_notification("initialized")
+
+        model_resp = self._rpc_request("model/list", {"includeHidden": False})
+        model_entries = self._extract_model_entries(model_resp)
+        if self.model not in self._extract_model_ids(model_resp):
+            raise RuntimeError(
+                f"Codex app-server model/list does not include required model {self.model!r}"
             )
-        finally:
-            with self._procs_lock:
-                if proc in self._active_procs:
-                    self._active_procs.remove(proc)
-            if schema_path:
-                schema_path.unlink(missing_ok=True)
-
-        return result
-
-    def _build_cmd(self, *, web_search: bool,
-                   json_schema: dict | None) -> tuple[list[str], Path | None]:
-        """Build a `codex exec` command line for a single call."""
-        cmd = [self._codex_bin]
-        if web_search:
-            cmd.append("--search")
-        cmd.extend([
-            "-a", "never",
-            "-s", "read-only",
-            "exec",
-            "--json",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--cd", str(self._work_dir),
-        ])
-        if self.model and self.model != "codex":
-            cmd.extend(["-m", self.model])
-        if self.reasoning_effort:
-            cmd.extend([
-                "-c",
-                f"model_reasoning_effort={json.dumps(self.reasoning_effort)}",
-            ])
-        cmd.extend(_codex_mcp_overrides(self.mcp_config))
-
-        schema_path = None
-        if json_schema:
-            fd, raw_path = tempfile.mkstemp(
-                prefix="openprover-codex-schema-",
-                suffix=".json",
+        model_entry = model_entries.get(self.model)
+        has_reasoning_metadata = self._model_has_reasoning_metadata(model_entry)
+        # Older app-server catalogs may omit reasoning metadata entirely.
+        if has_reasoning_metadata and not self._model_supports_reasoning(model_entry):
+            raise RuntimeError(
+                "Codex app-server model/list includes required model "
+                f"{self.model!r} but does not report reasoning support/effort capability"
             )
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(json_schema, f, ensure_ascii=False)
-            schema_path = Path(raw_path)
-            cmd.extend(["--output-schema", str(schema_path)])
 
-        return cmd, schema_path
+    def _ensure_server(self):
+        if self._proc is None or self._proc.poll() is not None:
+            self._start_server()
 
-    def _collect_events(self, *, proc: subprocess.Popen,
-                        call_num: int, label: str,
-                        prompt: str, system_prompt: str,
-                        json_schema: dict | None,
-                        archive_path: Path | None,
-                        start: float,
-                        stream_callback,
-                        tool_callback,
-                        tool_start_callback) -> dict:
-        """Read Codex JSONL events and produce an OpenProver-style response."""
-        raw_events: list[dict] = []
-        last_agent_message = ""
-        usage: dict = {}
-        interrupted = False
-        soft_interrupted = False
-        event_error = ""
-        tool_start_times: dict[str, float] = {}
+    def _drain_stderr(self):
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        for line in proc.stderr:
+            self._stderr_lines.append(line.rstrip("\n"))
+            if len(self._stderr_lines) > 200:
+                self._stderr_lines = self._stderr_lines[-200:]
 
-        try:
+    def _next_request_id(self) -> int:
+        self._request_id += 1
+        return self._request_id
+
+    def _send_notification(self, method: str, params: dict | None = None):
+        payload: dict[str, object] = {"method": method}
+        if params is not None:
+            payload["params"] = params
+        self._write_json(payload)
+
+    def _send_request_async(self, method: str, params: dict) -> int:
+        req_id = self._next_request_id()
+        payload = {"method": method, "id": req_id, "params": params}
+        self._write_json(payload)
+        self._ignored_response_ids.add(req_id)
+        return req_id
+
+    def _rpc_request(self, method: str, params: dict) -> dict:
+        max_overload_retries = 5
+        base_backoff_s = 0.2
+        max_backoff_s = 3.0
+
+        for attempt in range(max_overload_retries + 1):
+            req_id = self._next_request_id()
+            payload = {"method": method, "id": req_id, "params": params}
+            self._write_json(payload)
+
             while True:
-                if self._interrupted.is_set():
-                    interrupted = True
-                    kill_process_tree(proc)
-                    break
+                msg = self._read_message(timeout_s=60, include_pending=False)
 
-                line = proc.stdout.readline()
-                if not line:
-                    break
+                if self._handle_server_request(msg):
+                    continue
+
+                msg_id = msg.get("id")
+                if msg_id is None:
+                    self._pending_messages.append(msg)
+                    continue
+                if msg_id in self._ignored_response_ids:
+                    self._ignored_response_ids.discard(msg_id)
+                    continue
+                if msg_id != req_id:
+                    continue
+                if "error" in msg:
+                    err = msg["error"]
+                    if self._is_overload_error(err) and attempt < max_overload_retries:
+                        backoff = min(max_backoff_s, base_backoff_s * (2**attempt))
+                        jitter = random.uniform(0.0, backoff * 0.25)
+                        sleep_s = backoff + jitter
+                        logger.warning(
+                            "Codex app-server overloaded during %s; retry %d/%d in %.2fs",
+                            method,
+                            attempt + 1,
+                            max_overload_retries,
+                            sleep_s,
+                        )
+                        time.sleep(sleep_s)
+                        break
+                    raise RuntimeError(self._format_rpc_error(method, err))
+                return msg.get("result", {})
+
+        raise RuntimeError(f"Codex app-server {method} failed after retries")
+
+    def _read_message(self, timeout_s: float, *, include_pending: bool = True) -> dict:
+        if include_pending and self._pending_messages:
+            return self._pending_messages.pop(0)
+
+        return self._read_transport_message(timeout_s=timeout_s)
+
+    def _read_transport_message(self, timeout_s: float) -> dict:
+
+        proc = self._proc
+        if proc is None or proc.stdout is None:
+            raise RuntimeError("Codex app-server is not running")
+
+        deadline = time.time() + timeout_s
+        stdout_fd = proc.stdout.fileno()
+
+        while True:
+            while "\n" in self._stdout_buffer:
+                line, self._stdout_buffer = self._stdout_buffer.split("\n", 1)
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    msg = json.loads(line)
+                    return json.loads(line)
                 except json.JSONDecodeError:
-                    continue
+                    logger.debug("Ignoring non-JSON app-server line: %s", line)
 
-                raw_events.append(msg)
-                msg_type = msg.get("type", "")
+            if proc.poll() is not None:
+                stderr = "\n".join(self._stderr_lines[-20:])
+                raise RuntimeError(
+                    f"Codex app-server exited with code {proc.returncode}. {stderr}"
+                )
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise RuntimeError("Timed out waiting for Codex app-server message")
 
-                if msg_type == "turn.completed":
-                    usage = msg.get("usage", {}) or {}
-                    continue
+            readable, _, _ = select.select([stdout_fd], [], [], remaining)
+            if not readable:
+                continue
+            chunk = os.read(stdout_fd, 4096)
+            if not chunk:
+                time.sleep(0.01)
+                continue
+            self._stdout_buffer += chunk.decode("utf-8", errors="replace")
 
-                if msg_type.endswith(".failed") or msg_type == "error":
-                    event_error = json.dumps(msg, ensure_ascii=False)
-                    continue
+    def _wait_for_turn_completed(
+        self,
+        turn_id: str | None,
+        *,
+        stream_callback=None,
+        tool_callback=None,
+        tool_start_callback=None,
+    ) -> tuple[dict, dict]:
+        interrupt_sent = False
+        deadline = time.time() + 600
+        stream_state = {
+            "result_parts": [],
+            "thinking_parts": [],
+            "agent_text_by_item": {},
+            "reasoning_emitted_ids": set(),
+            "reasoning_content_delta_ids": set(),
+            "reasoning_summary_parts": {},
+            "reasoning_summary_buffers": {},
+            "pending_tools": {},
+        }
+        while True:
+            if (
+                self._interrupted.is_set() or self._soft_interrupted.is_set()
+            ) and not interrupt_sent:
+                self._send_turn_interrupt()
+                interrupt_sent = True
 
-                item = msg.get("item")
-                if not isinstance(item, dict):
-                    continue
-                item_type = _normalize_item_type(str(item.get("type", "")))
+            remaining = max(deadline - time.time(), 0.1)
+            msg = self._read_message(timeout_s=remaining)
 
-                if msg_type == "item.started":
-                    if item_type == "mcp_tool_call" and tool_start_callback:
-                        tool_name = str(item.get("tool") or item.get("name") or "")
-                        tool_args = item.get("arguments") or item.get("input") or {}
-                        tool_id = str(item.get("id") or "")
-                        if tool_id:
-                            tool_start_times[tool_id] = time.time()
-                        tool_start_callback(tool_name, tool_args)
-                    continue
+            if self._handle_server_request(msg):
+                continue
 
-                if msg_type != "item.completed":
-                    continue
+            msg_id = msg.get("id")
+            if msg_id is not None:
+                if msg_id in self._ignored_response_ids:
+                    self._ignored_response_ids.discard(msg_id)
+                continue
 
-                if item_type == "agent_message":
-                    last_agent_message = str(item.get("text") or "")
-                    continue
-
-                if item_type != "mcp_tool_call" or not tool_callback:
-                    continue
-
-                tool_name = str(item.get("tool") or item.get("name") or "")
-                tool_args = item.get("arguments") or item.get("input") or {}
-                result_text = _extract_tool_result_text(item.get("result"))
-                is_error = bool(item.get("error"))
-                if is_error and not result_text:
-                    result_text = str(item.get("error"))
-                status = _infer_tool_status(tool_name, result_text, is_error)
-                tool_id = str(item.get("id") or "")
-                started_at = tool_start_times.pop(tool_id, None)
-                duration_ms = 0
-                if started_at is not None:
-                    duration_ms = int((time.time() - started_at) * 1000)
-                tool_callback(tool_name, tool_args, result_text, status, duration_ms)
-        finally:
-            proc.wait()
-
-        elapsed_ms = int((time.time() - start) * 1000)
-        stderr = proc.stderr.read() if proc.stderr else ""
-
-        # Soft interrupts are advisory for Codex: allow the current response to
-        # finish so we keep the agent message instead of discarding it.
-        if self._soft_interrupted.is_set():
-            soft_interrupted = True
-            self._soft_interrupted.clear()
-
-        if interrupted:
-            self._archive(call_num, label, prompt, system_prompt, json_schema,
-                          None, "interrupted", elapsed_ms, archive_path)
-            logger.info("[%s] interrupted after %dms", label, elapsed_ms)
-            raise Interrupted()
-
-        if proc.returncode != 0:
-            err = stderr.strip() or event_error or (
-                f"Codex CLI failed (exit {proc.returncode})"
+            completed = self._process_stream_notification(
+                msg,
+                turn_id=turn_id,
+                stream_callback=stream_callback,
+                tool_callback=tool_callback,
+                tool_start_callback=tool_start_callback,
+                stream_state=stream_state,
             )
-            self._archive(call_num, label, prompt, system_prompt, json_schema,
-                          None, err, elapsed_ms, archive_path)
-            if is_quota_exceeded_error(err):
-                raise QuotaExceeded(err[:1000])
-            raise RuntimeError(err[:1000])
+            if completed is not None:
+                return completed, stream_state
 
-        if event_error:
-            self._archive(call_num, label, prompt, system_prompt, json_schema,
-                          None, event_error, elapsed_ms, archive_path)
-            if is_quota_exceeded_error(event_error):
-                raise QuotaExceeded(event_error[:1000])
-            raise RuntimeError(event_error[:1000])
+            if msg.get("method") != "turn/completed":
+                continue
 
-        raw = {
-            "model": self.model,
-            "usage": {
-                "input_tokens": usage.get("input_tokens", 0),
-                "output_tokens": usage.get("output_tokens", 0),
-                "cache_read_input_tokens": usage.get("cached_input_tokens", 0),
+            params = msg.get("params", {})
+            completed_turn_id = params.get("turn", {}).get("id")
+            if turn_id and completed_turn_id and completed_turn_id != turn_id:
+                continue
+            return params, stream_state
+
+    def _send_turn_interrupt(self):
+        turn_id = self._active_turn_id
+        if not turn_id:
+            return
+        params = {"turnId": turn_id}
+        thread_id = self._active_thread_id
+        if thread_id:
+            params["threadId"] = thread_id
+        try:
+            self._send_request_async("turn/interrupt", params)
+        except RuntimeError:
+            return
+
+    def _write_json(self, payload: dict):
+        proc = self._proc
+        if proc is None or proc.stdin is None:
+            raise RuntimeError("Codex app-server is not running")
+        with self._io_lock:
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+
+    def _send_error_response(self, req_id: int, code: int, message: str):
+        self._write_json({"id": req_id, "error": {"code": code, "message": message}})
+
+    def _handle_server_request(self, msg: dict) -> bool:
+        req_id = msg.get("id")
+        method = msg.get("method")
+        if req_id is None or not isinstance(method, str):
+            return False
+
+        if self._is_approval_request_method(method):
+            self._send_error_response(
+                req_id,
+                -32000,
+                "Approvals are disabled in this integration",
+            )
+            raise RuntimeError(
+                f"Codex app-server requested approval via {method!r} even though approvalPolicy is 'never'"
+            )
+
+        if method == "tool/requestUserInput":
+            self._send_error_response(
+                req_id,
+                -32000,
+                "Interactive user input is unsupported in this integration",
+            )
+            raise RuntimeError(
+                "Codex app-server requested interactive user input unexpectedly"
+            )
+
+        self._send_error_response(
+            req_id,
+            -32601,
+            f"Unsupported server request method: {method}",
+        )
+        raise RuntimeError(
+            f"Codex app-server sent unsupported server request {method!r}"
+        )
+
+    @staticmethod
+    def _is_approval_request_method(method: str) -> bool:
+        lowered = method.lower()
+        return (
+            "requestapproval" in lowered
+            or lowered == "item/permissions/requestapproval"
+            or lowered == "item/commandexecution/requestapproval"
+            or lowered == "item/filechange/requestapproval"
+        )
+
+    @staticmethod
+    def _is_overload_error(err: dict) -> bool:
+        code = err.get("code") if isinstance(err, dict) else None
+        msg = err.get("message", "") if isinstance(err, dict) else ""
+        return code == -32001 and "overload" in str(msg).lower()
+
+    @classmethod
+    def _format_rpc_error(cls, method: str, err: dict) -> str:
+        message = str(err.get("message", err)) if isinstance(err, dict) else str(err)
+        code = err.get("code") if isinstance(err, dict) else None
+        lowered = message.lower()
+
+        if code == -32001:
+            return f"Codex app-server {method} failed after overload retries: {message}"
+        if "auth" in lowered or "unauthor" in lowered or "forbidden" in lowered:
+            return f"Codex app-server authentication failed during {method}: {message}"
+        if (
+            method in ("thread/start", "thread/resume")
+            and "mcp" in lowered
+            and (
+                "required" in lowered or "initialize" in lowered or "failed" in lowered
+            )
+        ):
+            return (
+                "Codex app-server failed to start/resume thread because a required MCP "
+                f"server failed to initialize: {message}"
+            )
+        if "approval" in lowered:
+            return (
+                "Codex app-server requested approval unexpectedly while approvalPolicy="
+                f"'never': {message}"
+            )
+        if method in ("initialize", "model/list", "thread/start", "turn/start"):
+            return f"Codex app-server startup failed during {method}: {message}"
+        return f"Codex app-server {method} failed: {message}"
+
+    @staticmethod
+    def _normalize_tool_name(name: str) -> str:
+        normalized = name.strip()
+        if normalized.startswith("mcp__"):
+            parts = normalized.split("__", 2)
+            if len(parts) == 3 and parts[-1]:
+                return parts[-1]
+        return normalized
+
+    @staticmethod
+    def _parse_tool_args(raw_args) -> dict:
+        if isinstance(raw_args, dict):
+            return raw_args
+        if isinstance(raw_args, str):
+            stripped = raw_args.strip()
+            if not stripped:
+                return {}
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"value": parsed}
+            except json.JSONDecodeError:
+                return {"raw": raw_args}
+        if raw_args is None:
+            return {}
+        return {"value": raw_args}
+
+    @staticmethod
+    def _extract_tool_name(item: dict) -> str:
+        for key in ("name", "toolName", "tool", "tool_name"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        call = item.get("call")
+        if isinstance(call, dict):
+            for key in ("name", "toolName"):
+                value = call.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return ""
+
+    @classmethod
+    def _extract_tool_args(cls, item: dict) -> dict:
+        for key in ("input", "args", "arguments", "toolInput", "tool_input"):
+            if key in item:
+                return cls._parse_tool_args(item.get(key))
+        call = item.get("call")
+        if isinstance(call, dict):
+            for key in ("input", "args", "arguments"):
+                if key in call:
+                    return cls._parse_tool_args(call.get(key))
+        return {}
+
+    @classmethod
+    def _is_mcp_tool_item(cls, item: dict, raw_name: str) -> bool:
+        if raw_name.startswith("mcp__"):
+            return True
+        item_type = item.get("type")
+        return isinstance(item_type, str) and "mcp" in item_type.lower()
+
+    @classmethod
+    def _extract_tool_result_text(cls, item: dict) -> str:
+        for key in ("result", "output", "response", "content", "text"):
+            if key in item:
+                value = item.get(key)
+                if isinstance(value, dict):
+                    nested = value.get("result", value.get("content", value))
+                    text = cls._collect_text(nested)
+                else:
+                    text = cls._collect_text(value)
+                if text:
+                    return text
+        call = item.get("call")
+        if isinstance(call, dict):
+            for key in ("result", "output", "response", "content"):
+                if key in call:
+                    text = cls._collect_text(call.get(key))
+                    if text:
+                        return text
+        return ""
+
+    @classmethod
+    def _infer_tool_status(
+        cls,
+        name: str,
+        result_text: str,
+        *,
+        is_error: bool,
+        raw_status,
+    ) -> str:
+        status_map = {
+            "ok": "ok",
+            "success": "ok",
+            "completed": "ok",
+            "partial": "partial",
+            "running": "running",
+            "in_progress": "running",
+            "pending": "running",
+            "error": "error",
+            "failed": "error",
+        }
+        if isinstance(raw_status, str):
+            mapped = status_map.get(raw_status.strip().lower())
+            if mapped:
+                return mapped
+
+        if is_error:
+            return "error"
+
+        if name == "lean_verify":
+            first_line = result_text.split("\n", 1)[0] if result_text else ""
+            if first_line.startswith("OK"):
+                return "ok"
+            if re.search(r"^\d+:\d+: error", result_text, re.MULTILINE):
+                return "error"
+            if "sorry" in result_text.lower():
+                return "partial"
+            return "ok"
+
+        return "ok"
+
+    @classmethod
+    def _maybe_emit_tool_start(
+        cls,
+        item: dict,
+        *,
+        stream_state: dict,
+        tool_start_callback,
+    ) -> bool:
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            return False
+
+        raw_name = cls._extract_tool_name(item)
+        if not raw_name or not cls._is_mcp_tool_item(item, raw_name):
+            return False
+
+        name = cls._normalize_tool_name(raw_name)
+        args = cls._extract_tool_args(item)
+        start_entry = stream_state["pending_tools"].setdefault(
+            item_id,
+            {
+                "name": name,
+                "args": args,
+                "started_at": time.time(),
+                "start_emitted": False,
+                "is_mcp": True,
             },
-            "stop_reason": "completed",
-            "events": raw_events,
-        }
-        cost = _estimate_cost_usd(self.model, usage)
-        if cost:
-            raw["total_cost_usd"] = cost
-            self.total_cost += cost
+        )
+        start_entry["name"] = name
+        start_entry["args"] = args
+        start_entry["is_mcp"] = True
+        if callable(tool_start_callback) and not start_entry["start_emitted"]:
+            tool_start_callback(name, args)
+            start_entry["start_emitted"] = True
+        return True
 
-        self._archive(call_num, label, prompt, system_prompt, json_schema,
-                      raw, None, elapsed_ms, archive_path,
-                      result_text=last_agent_message)
-        if soft_interrupted:
-            logger.info("[%s] soft interrupt requested; returned completed output after %dms",
-                        label, elapsed_ms)
-        else:
-            logger.info("[%s] done %dms", label, elapsed_ms)
+    @classmethod
+    def _maybe_emit_tool_completed(
+        cls,
+        item: dict,
+        *,
+        stream_state: dict,
+        tool_callback,
+        tool_start_callback,
+    ) -> bool:
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            return False
 
-        if stream_callback and last_agent_message:
-            stream_callback(last_agent_message, "text")
+        raw_name = cls._extract_tool_name(item)
+        pending = stream_state["pending_tools"].pop(item_id, None)
+        pending_is_mcp = bool(pending and pending.get("is_mcp"))
 
-        return {
-            "result": last_agent_message,
-            "thinking": "",
-            "cost": cost,
-            "duration_ms": elapsed_ms,
-            "raw": raw,
-            "finish_reason": "stop",
-        }
+        if not raw_name and pending:
+            raw_name = pending.get("name", "")
+        if not raw_name:
+            return False
+        if not (pending_is_mcp or cls._is_mcp_tool_item(item, raw_name)):
+            return False
 
-    def _archive(self, call_num, label, prompt, system_prompt, json_schema,
-                 response, error, elapsed_ms, archive_path=None,
-                 *, thinking="", result_text=""):
-        archive(self.model, self.archive_dir, call_num, label, prompt,
-                system_prompt, json_schema, response, error, elapsed_ms,
-                archive_path, thinking=thinking, result_text=result_text)
+        name = cls._normalize_tool_name(raw_name)
+        args = cls._extract_tool_args(item)
+        if not args and pending:
+            args = pending.get("args", {})
+
+        started_at = time.time()
+        start_emitted = False
+        if pending:
+            started_at = pending.get("started_at", started_at)
+            start_emitted = bool(pending.get("start_emitted", False))
+
+        if callable(tool_start_callback) and not start_emitted:
+            tool_start_callback(name, args)
+            start_emitted = True
+
+        result_text = cls._extract_tool_result_text(item)
+        is_error = bool(
+            item.get("is_error") or item.get("isError") or item.get("error")
+        )
+        status = cls._infer_tool_status(
+            name,
+            result_text,
+            is_error=is_error,
+            raw_status=item.get("status"),
+        )
+        duration_ms = max(0, int((time.time() - started_at) * 1000))
+        if callable(tool_callback):
+            tool_callback(name, args, result_text, status, duration_ms)
+        return True
+
+    @staticmethod
+    def _collect_text(value) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, list):
+            parts = []
+            for item in value:
+                if isinstance(item, str) and item.strip():
+                    parts.append(item.strip())
+                    continue
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str) and text.strip():
+                        parts.append(text.strip())
+            return "\n".join(parts).strip()
+        return ""
+
+    @classmethod
+    def _extract_reasoning_text(cls, item: dict) -> str:
+        content_text = cls._collect_text(item.get("content"))
+        if content_text:
+            return content_text
+        return cls._collect_text(item.get("summary"))
+
+    @classmethod
+    def _process_stream_notification(
+        cls,
+        msg: dict,
+        *,
+        turn_id: str | None,
+        stream_callback,
+        tool_callback,
+        tool_start_callback,
+        stream_state: dict,
+    ) -> dict | None:
+        method = msg.get("method")
+        if not isinstance(method, str):
+            return None
+
+        params = msg.get("params", {})
+        if not isinstance(params, dict):
+            return None
+
+        msg_turn_id = params.get("turnId")
+        if turn_id and isinstance(msg_turn_id, str) and msg_turn_id != turn_id:
+            return None
+
+        if method == "item/agentMessage/delta":
+            delta = params.get("delta")
+            item_id = params.get("itemId")
+            if isinstance(delta, str) and delta:
+                if callable(stream_callback):
+                    stream_callback(delta, "text")
+                stream_state["result_parts"].append(delta)
+                if isinstance(item_id, str) and item_id:
+                    current = stream_state["agent_text_by_item"].get(item_id, "")
+                    stream_state["agent_text_by_item"][item_id] = current + delta
+            return None
+
+        if method == "item/reasoning/textDelta":
+            delta = params.get("delta")
+            item_id = params.get("itemId")
+            if isinstance(delta, str) and delta:
+                if callable(stream_callback):
+                    stream_callback(delta, "thinking")
+                stream_state["thinking_parts"].append(delta)
+                if isinstance(item_id, str) and item_id:
+                    stream_state["reasoning_emitted_ids"].add(item_id)
+                    stream_state["reasoning_content_delta_ids"].add(item_id)
+            return None
+
+        if method == "item/reasoning/summaryPartAdded":
+            item_id = params.get("itemId")
+            summary_index = params.get("summaryIndex")
+            if isinstance(item_id, str) and item_id and isinstance(summary_index, int):
+                summary_parts = stream_state["reasoning_summary_parts"].setdefault(
+                    item_id, set()
+                )
+                summary_parts.add(summary_index)
+            return None
+
+        if method == "item/reasoning/summaryTextDelta":
+            delta = params.get("delta")
+            item_id = params.get("itemId")
+            summary_index = params.get("summaryIndex")
+            if not (isinstance(delta, str) and delta):
+                return None
+            if not (isinstance(item_id, str) and item_id):
+                return None
+            if isinstance(summary_index, int):
+                summary_parts = stream_state["reasoning_summary_parts"].setdefault(
+                    item_id, set()
+                )
+                summary_parts.add(summary_index)
+            summary_buffer = stream_state["reasoning_summary_buffers"].setdefault(
+                item_id, []
+            )
+            summary_buffer.append(delta)
+            return None
+
+        if method == "item/completed":
+            item = params.get("item")
+            if not isinstance(item, dict):
+                return None
+
+            if cls._maybe_emit_tool_completed(
+                item,
+                stream_state=stream_state,
+                tool_callback=tool_callback,
+                tool_start_callback=tool_start_callback,
+            ):
+                return None
+
+            item_type = item.get("type")
+            item_id = item.get("id")
+
+            if item_type == "agentMessage":
+                final_text = cls._collect_text(item.get("text"))
+                if not final_text:
+                    return None
+                streamed_text = ""
+                if isinstance(item_id, str):
+                    streamed_text = stream_state["agent_text_by_item"].get(item_id, "")
+                missing = ""
+                if streamed_text and final_text.startswith(streamed_text):
+                    missing = final_text[len(streamed_text) :]
+                elif not streamed_text:
+                    missing = final_text
+                elif final_text != streamed_text:
+                    missing = final_text
+                if missing:
+                    if callable(stream_callback):
+                        stream_callback(missing, "text")
+                    stream_state["result_parts"].append(missing)
+                    if isinstance(item_id, str) and item_id:
+                        stream_state["agent_text_by_item"][item_id] = (
+                            streamed_text + missing
+                        )
+                return None
+
+            if item_type == "reasoning":
+                item_key = item_id if isinstance(item_id, str) else ""
+                if item_key and item_key in stream_state["reasoning_content_delta_ids"]:
+                    stream_state["reasoning_summary_buffers"].pop(item_key, None)
+                reasoning_text = ""
+                if (
+                    item_key
+                    and item_key not in stream_state["reasoning_content_delta_ids"]
+                ):
+                    reasoning_text = "".join(
+                        stream_state["reasoning_summary_buffers"].pop(item_key, [])
+                    ).strip()
+                if not reasoning_text:
+                    reasoning_text = cls._extract_reasoning_text(item)
+                if not reasoning_text:
+                    return None
+                if item_key and item_key in stream_state["reasoning_emitted_ids"]:
+                    return None
+                if callable(stream_callback):
+                    # Emit completed-item reasoning only when no stable live
+                    # reasoning deltas were emitted for this item.
+                    stream_callback(reasoning_text, "thinking")
+                stream_state["thinking_parts"].append(reasoning_text)
+                if item_key:
+                    stream_state["reasoning_emitted_ids"].add(item_key)
+                return None
+
+            return None
+
+        if method == "item/started":
+            item = params.get("item")
+            if not isinstance(item, dict):
+                return None
+            cls._maybe_emit_tool_start(
+                item,
+                stream_state=stream_state,
+                tool_start_callback=tool_start_callback,
+            )
+            return None
+
+        if method == "turn/completed":
+            for item_key, parts in list(
+                stream_state["reasoning_summary_buffers"].items()
+            ):
+                if item_key in stream_state["reasoning_content_delta_ids"]:
+                    continue
+                if item_key in stream_state["reasoning_emitted_ids"]:
+                    continue
+                summary_text = "".join(parts).strip()
+                if not summary_text:
+                    continue
+                if callable(stream_callback):
+                    stream_callback(summary_text, "thinking")
+                stream_state["thinking_parts"].append(summary_text)
+                stream_state["reasoning_emitted_ids"].add(item_key)
+            completed_turn_id = params.get("turn", {}).get("id")
+            if turn_id and completed_turn_id and completed_turn_id != turn_id:
+                return None
+            return params
+
+        return None
+
+    @staticmethod
+    def _extract_model_ids(model_list_result: dict) -> set[str]:
+        out = set()
+        for item in model_list_result.get("data", []):
+            if isinstance(item, dict):
+                model_id = item.get("id") or item.get("model")
+                if isinstance(model_id, str) and model_id:
+                    out.add(model_id)
+        return out
+
+    @staticmethod
+    def _extract_model_entries(model_list_result: dict) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for item in model_list_result.get("data", []):
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id") or item.get("model")
+            if isinstance(model_id, str) and model_id:
+                out[model_id] = item
+        return out
+
+    @staticmethod
+    def _model_supports_reasoning(model_entry: dict | None) -> bool:
+        if not isinstance(model_entry, dict):
+            return False
+        caps = model_entry.get("capabilities")
+        if isinstance(caps, dict):
+            for key in (
+                "reasoning",
+                "reasoningEffort",
+                "supportsReasoning",
+                "supports_reasoning",
+                "effort",
+            ):
+                value = caps.get(key)
+                if value:
+                    return True
+        for key in (
+            "reasoning",
+            "reasoningEffort",
+            "supportsReasoning",
+            "supports_reasoning",
+            "effort",
+            "supportedEfforts",
+            "reasoningEfforts",
+        ):
+            value = model_entry.get(key)
+            if value:
+                return True
+        return False
+
+    @staticmethod
+    def _model_has_reasoning_metadata(model_entry: dict | None) -> bool:
+        if not isinstance(model_entry, dict):
+            return False
+        caps = model_entry.get("capabilities")
+        if isinstance(caps, dict):
+            for key in (
+                "reasoning",
+                "reasoningEffort",
+                "supportsReasoning",
+                "supports_reasoning",
+                "effort",
+            ):
+                if key in caps:
+                    return True
+        for key in (
+            "reasoning",
+            "reasoningEffort",
+            "supportsReasoning",
+            "supports_reasoning",
+            "effort",
+            "supportedEfforts",
+            "reasoningEfforts",
+        ):
+            if key in model_entry:
+                return True
+        return False
+
+    @staticmethod
+    def _extract_turn_outputs(turn_completed_params: dict) -> tuple[str, str]:
+        result_parts = []
+        thinking_parts = []
+        items = turn_completed_params.get("turn", {}).get("items", [])
+        if not isinstance(items, list):
+            return "", ""
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            item_type = item.get("type")
+            if item_type == "agentMessage":
+                text = CodexClient._collect_text(item.get("text"))
+                if text:
+                    result_parts.append(text)
+                continue
+
+            if item_type == "reasoning":
+                reasoning_text = CodexClient._extract_reasoning_text(item)
+                if reasoning_text:
+                    thinking_parts.append(reasoning_text)
+
+        return "\n\n".join(result_parts).strip(), "\n\n".join(thinking_parts).strip()
+
+    def _archive(
+        self,
+        call_num,
+        label,
+        prompt,
+        system_prompt,
+        json_schema,
+        response,
+        error,
+        elapsed_ms,
+        archive_path=None,
+        *,
+        thinking="",
+        result_text="",
+    ):
+        archive(
+            self.model,
+            self.archive_dir,
+            call_num,
+            label,
+            prompt,
+            system_prompt,
+            json_schema,
+            response,
+            error,
+            elapsed_ms,
+            archive_path,
+            thinking=thinking,
+            result_text=result_text,
+        )

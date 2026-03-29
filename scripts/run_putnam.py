@@ -61,9 +61,6 @@ def _run_problem(problem_name: str, statement: str, lean_dir: Path,
         cmd.append("--isolation")
     else:
         cmd.append("--no-isolation")
-    if args.give_up_after is not None:
-        cmd.extend(["--give-up-after", str(args.give_up_after)])
-
     start = time.monotonic()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -146,7 +143,7 @@ def main():
                         help="Number of concurrent openprover instances (default: 1)")
     parser.add_argument("-P", "--parallelism", type=int, default=1,
                         help="Max parallel workers per spawn step inside openprover (default: 1)")
-    model_choices = ["sonnet", "opus", "minimax-m2.5"]
+    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral"]
     parser.add_argument("--model", default="sonnet", choices=model_choices)
     parser.add_argument("--planner-model", choices=model_choices, default=None,
                         help="Override model for planner (defaults to --model)")
@@ -156,8 +153,6 @@ def main():
                         help="Server URL for local models (default: http://localhost:8000)")
     parser.add_argument("--max-time", default="4h", metavar="DURATION",
                         help="Wall-clock time budget per problem, e.g. '30m', '2h' (default: 4h)")
-    parser.add_argument("--give-up-after", type=float, default=None, metavar="RATIO",
-                        help="Fraction of budget before give_up is allowed (default: 0.5)")
     parser.add_argument("--autonomous", action="store_true")
     parser.add_argument("--informal", action="store_true",
                         help="Skip Lean setup/verification; run openprover without formal checking")
@@ -245,8 +240,6 @@ def main():
             cmd.append("--isolation")
         else:
             cmd.append("--no-isolation")
-        if args.give_up_after is not None:
-            cmd.extend(["--give-up-after", str(args.give_up_after)])
         if args.verbose:
             cmd.append("--verbose")
 

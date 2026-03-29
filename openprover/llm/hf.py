@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import socket
 import threading
 import time
 import urllib.request
@@ -59,6 +60,11 @@ def _split_think_tags(text: str) -> tuple[str, str]:
 MODEL_CONTEXT_LENGTHS = {
     "MiniMaxAI/MiniMax-M2.5": 196608,
 }
+
+
+# Per-read timeout for streaming responses (seconds).  If the server stops
+# sending data for this long the read raises socket.timeout so we don't hang.
+STREAM_READ_TIMEOUT = 30
 
 
 class HFClient:
@@ -284,6 +290,9 @@ class HFClient:
         )
         try:
             resp = urllib.request.urlopen(req, timeout=600)
+            # Set per-read timeout so we don't hang if the server stops sending
+            if hasattr(resp, 'fp') and hasattr(resp.fp, 'raw'):
+                resp.fp.raw._sock.settimeout(STREAM_READ_TIMEOUT)
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
             elapsed_ms = int((time.time() - start) * 1000)
@@ -308,67 +317,77 @@ class HFClient:
         interrupted = False
         finish_reason = "stop"
 
-        for raw_line in resp:
-            if self._interrupted.is_set():
-                interrupted = True
-                resp.close()
-                break
-            line = raw_line.decode().strip()
-            data_str = _extract_sse_data_str(line)
-            if data_str is None:
-                continue
-            if data_str == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
-            choice = chunk.get("choices", [{}])[0]
-            chunk_finish = choice.get("finish_reason")
-            if chunk_finish:
-                finish_reason = chunk_finish
-            delta = choice.get("delta", {})
-
-            if self.vllm:
-                # vLLM with --reasoning-parser separates thinking/content
-                reasoning = _extract_vllm_reasoning(delta)
-                content = delta.get("content", "")
-                if reasoning:
-                    callback(reasoning, "thinking")
-                    thinking_parts.append(reasoning)
-                if content:
-                    callback(content, "text")
-                    output_parts.append(content)
-            else:
-                content = delta.get("content", "")
-                if not content:
+        try:
+            for raw_line in resp:
+                if self._interrupted.is_set():
+                    interrupted = True
+                    resp.close()
+                    break
+                line = raw_line.decode().strip()
+                data_str = _extract_sse_data_str(line)
+                if data_str is None:
                     continue
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                choice = chunk.get("choices", [{}])[0]
+                chunk_finish = choice.get("finish_reason")
+                if chunk_finish:
+                    finish_reason = chunk_finish
+                delta = choice.get("delta", {})
 
-                if in_thinking:
-                    pending += content
-                    # Look for </think> in pending buffer
-                    end_idx = pending.find("</think>")
-                    if end_idx >= 0:
-                        think_part = pending[:end_idx]
-                        if think_part:
-                            callback(think_part, "thinking")
-                            thinking_parts.append(think_part)
-                        in_thinking = False
-                        remainder = pending[end_idx + 8:]
-                        pending = ""
-                        if remainder.strip():
-                            callback(remainder, "text")
-                            output_parts.append(remainder)
-                    else:
-                        # Emit all but last 8 chars (could be partial </think>)
-                        safe = len(pending) - 8
-                        if safe > 0:
-                            callback(pending[:safe], "thinking")
-                            thinking_parts.append(pending[:safe])
-                            pending = pending[safe:]
+                if self.vllm:
+                    # vLLM with --reasoning-parser separates thinking/content
+                    reasoning = _extract_vllm_reasoning(delta)
+                    content = delta.get("content", "")
+                    if reasoning:
+                        callback(reasoning, "thinking")
+                        thinking_parts.append(reasoning)
+                    if content:
+                        callback(content, "text")
+                        output_parts.append(content)
                 else:
-                    callback(content, "text")
-                    output_parts.append(content)
+                    content = delta.get("content", "")
+                    if not content:
+                        continue
+
+                    if in_thinking:
+                        pending += content
+                        # Look for </think> in pending buffer
+                        end_idx = pending.find("</think>")
+                        if end_idx >= 0:
+                            think_part = pending[:end_idx]
+                            if think_part:
+                                callback(think_part, "thinking")
+                                thinking_parts.append(think_part)
+                            in_thinking = False
+                            remainder = pending[end_idx + 8:]
+                            pending = ""
+                            if remainder.strip():
+                                callback(remainder, "text")
+                                output_parts.append(remainder)
+                        else:
+                            # Emit all but last 8 chars (could be partial </think>)
+                            safe = len(pending) - 8
+                            if safe > 0:
+                                callback(pending[:safe], "thinking")
+                                thinking_parts.append(pending[:safe])
+                                pending = pending[safe:]
+                    else:
+                        callback(content, "text")
+                        output_parts.append(content)
+        except socket.timeout:
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.warning("[%s] stream read timed out after %dms", label, elapsed_ms)
+            self._archive(call_num, label, prompt, system_prompt, json_schema,
+                          None, f"stream read timeout ({STREAM_READ_TIMEOUT}s)",
+                          elapsed_ms, archive_path)
+            raise RuntimeError(
+                f"Server stopped sending data for {STREAM_READ_TIMEOUT}s "
+                f"(stream read timeout after {elapsed_ms}ms)")
 
         # Flush any remaining pending buffer (serve_hf only)
         if pending:
@@ -413,6 +432,7 @@ class HFClient:
         label: str = "",
         stream_callback=None,
         archive_path: Path | None = None,
+        **_kwargs,
     ) -> dict:
         """Multi-turn chat with optional tool calling (vLLM only).
 
@@ -533,6 +553,9 @@ class HFClient:
         )
         try:
             resp = urllib.request.urlopen(req, timeout=600)
+            # Set per-read timeout so we don't hang if the server stops sending
+            if hasattr(resp, 'fp') and hasattr(resp.fp, 'raw'):
+                resp.fp.raw._sock.settimeout(STREAM_READ_TIMEOUT)
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
             elapsed_ms = int((time.time() - start) * 1000)
@@ -551,57 +574,67 @@ class HFClient:
         finish_reason = "stop"
         interrupted = False
 
-        for raw_line in resp:
-            if self._interrupted.is_set():
-                interrupted = True
-                resp.close()
-                break
-            line = raw_line.decode().strip()
-            data_str = _extract_sse_data_str(line)
-            if data_str is None:
-                continue
-            if data_str == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
+        try:
+            for raw_line in resp:
+                if self._interrupted.is_set():
+                    interrupted = True
+                    resp.close()
+                    break
+                line = raw_line.decode().strip()
+                data_str = _extract_sse_data_str(line)
+                if data_str is None:
+                    continue
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
 
-            choice = chunk.get("choices", [{}])[0]
-            chunk_finish = choice.get("finish_reason")
-            if chunk_finish:
-                finish_reason = chunk_finish
-            delta = choice.get("delta", {})
+                choice = chunk.get("choices", [{}])[0]
+                chunk_finish = choice.get("finish_reason")
+                if chunk_finish:
+                    finish_reason = chunk_finish
+                delta = choice.get("delta", {})
 
-            # Reasoning content
-            reasoning = _extract_vllm_reasoning(delta)
-            if reasoning:
-                callback(reasoning, "thinking")
-                thinking_parts.append(reasoning)
+                # Reasoning content
+                reasoning = _extract_vllm_reasoning(delta)
+                if reasoning:
+                    callback(reasoning, "thinking")
+                    thinking_parts.append(reasoning)
 
-            # Text content
-            content = delta.get("content", "")
-            if content:
-                callback(content, "text")
-                output_parts.append(content)
+                # Text content
+                content = delta.get("content", "")
+                if content:
+                    callback(content, "text")
+                    output_parts.append(content)
 
-            # Tool call deltas
-            for tc_delta in delta.get("tool_calls", []):
-                idx = tc_delta.get("index", 0)
-                if idx not in tool_call_acc:
-                    tool_call_acc[idx] = {
-                        "id": tc_delta.get("id", ""),
-                        "type": "function",
-                        "function": {"name": "", "arguments": ""},
-                    }
-                acc = tool_call_acc[idx]
-                if tc_delta.get("id"):
-                    acc["id"] = tc_delta["id"]
-                fn = tc_delta.get("function", {})
-                if fn.get("name"):
-                    acc["function"]["name"] = fn["name"]
-                if fn.get("arguments"):
-                    acc["function"]["arguments"] += fn["arguments"]
+                # Tool call deltas
+                for tc_delta in delta.get("tool_calls", []):
+                    idx = tc_delta.get("index", 0)
+                    if idx not in tool_call_acc:
+                        tool_call_acc[idx] = {
+                            "id": tc_delta.get("id", ""),
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    acc = tool_call_acc[idx]
+                    if tc_delta.get("id"):
+                        acc["id"] = tc_delta["id"]
+                    fn = tc_delta.get("function", {})
+                    if fn.get("name"):
+                        acc["function"]["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        acc["function"]["arguments"] += fn["arguments"]
+        except socket.timeout:
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.warning("[%s] stream read timed out after %dms", label, elapsed_ms)
+            self._archive(call_num, label, prompt_text, "", None,
+                          None, f"stream read timeout ({STREAM_READ_TIMEOUT}s)",
+                          elapsed_ms, archive_path)
+            raise RuntimeError(
+                f"Server stopped sending data for {STREAM_READ_TIMEOUT}s "
+                f"(stream read timeout after {elapsed_ms}ms)")
 
         elapsed_ms = int((time.time() - start) * 1000)
 

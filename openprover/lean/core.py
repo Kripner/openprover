@@ -17,6 +17,34 @@ def lean_has_errors(feedback: str) -> bool:
     return bool(_LEAN_ERROR_RE.search(feedback))
 
 
+# Matches ```lean ... ``` or ```  ... ``` code fences (with optional language tag)
+_CODE_FENCE_RE = re.compile(
+    r"^\s*```\w*\s*\n(.*?)^\s*```\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+# Matches <code>...</code> or <code lang="lean">...</code>
+_CODE_TAG_RE = re.compile(
+    r"<code(?:\s[^>]*)?>(.+?)</code>",
+    re.DOTALL,
+)
+
+
+def strip_code_fences(code: str) -> str:
+    """Strip markdown code fences or HTML code tags from LLM-generated code.
+
+    Models sometimes wrap tool arguments in ```lean ... ```, <code>...</code>,
+    or similar. This extracts the inner content, or returns the original if
+    no wrapping found.
+    """
+    m = _CODE_FENCE_RE.search(code)
+    if m:
+        return m.group(1)
+    m = _CODE_TAG_RE.search(code)
+    if m:
+        return m.group(1)
+    return code
+
+
 class LeanTheorem:
     """Parsed representation of a THEOREM.lean file with sorry placeholders."""
 

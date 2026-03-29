@@ -399,7 +399,6 @@ class StepsMixin:
             "read_theorem": "Theorem Analysis",
             "submit_proof": "Submission",
             "submit_lean_proof": "Lean Submission",
-            "give_up": "Termination",
         }.get(action, "Step Details")
 
     def _refresh_step_detail(self):
@@ -543,45 +542,54 @@ class StepsMixin:
 
         if action == "spawn":
             worker_tabs = entry.get("worker_tabs") or []
-            # Collect worker output lines by index for verifier input display
-            worker_output_by_idx: dict[str, list[str]] = {}
+            # Group worker and verifier tabs by worker index
+            workers: dict[str, _Tab] = {}
+            verifiers: dict[str, _Tab] = {}
             for tab in worker_tabs:
                 label = getattr(tab, "label", "").strip() or "Worker"
-                is_verifier = label.startswith("Verify")
-                task_description = getattr(tab, "task_description", "").strip()
+                if label.startswith("Verify"):
+                    v_idx = label.split()[-1] if " " in label else "0"
+                    verifiers[v_idx] = tab
+                else:
+                    w_idx = label.split()[-1] if " " in label else "0"
+                    workers[w_idx] = tab
 
-                if is_verifier:
-                    # Show the worker output being verified as input
-                    # Extract worker index from label like "Verify 0"
-                    v_idx = label.split()[-1] if " " in label else ""
-                    worker_lines = worker_output_by_idx.get(v_idx, [])
-                    if worker_lines:
-                        add_section(
-                            f"{label} - Worker {v_idx} Output",
-                            worker_lines,
-                            color=CYAN,
-                        )
-                elif task_description:
-                    add_section(
-                        f"{label} Input",
-                        task_description.splitlines(),
-                        color=CYAN,
-                    )
-
-                result_lines: list[str] = []
-                log_lines = getattr(tab, "log_lines", []) or []
-                for log_entry in log_lines:
+            def _tab_output_lines(tab: _Tab) -> list[str]:
+                """Extract output lines from a tab, dimming reasoning traces."""
+                result: list[str] = []
+                for log_entry in (getattr(tab, "log_lines", []) or []):
                     text = getattr(log_entry, "text", "")
                     if not text or text == self._dim_separator():
                         continue
-                    result_lines.append(text)
-                if result_lines:
-                    add_section(f"{label} Output", result_lines, color=MAGENTA)
+                    is_trace = getattr(log_entry, "is_trace", False)
+                    if is_trace:
+                        if self.trace_visible:
+                            for line in text.splitlines():
+                                result.append(f"{DIM}{line}{RESET}")
+                        else:
+                            tok = self._approx_token_label(text)
+                            result.append(f"{DIM}[reasoning - {tok}]{RESET}")
+                    else:
+                        result.append(text)
+                return result
 
-                # Store worker output for verifier input display
-                if not is_verifier:
-                    w_idx = label.split()[-1] if " " in label else ""
-                    worker_output_by_idx[w_idx] = result_lines
+            for w_idx in sorted(workers.keys()):
+                wtab = workers[w_idx]
+                task_description = getattr(wtab, "task_description", "").strip()
+                if task_description:
+                    add_section(
+                        f"Worker {w_idx} Input",
+                        task_description.splitlines(),
+                        color=CYAN,
+                    )
+                out_lines = _tab_output_lines(wtab)
+                if out_lines:
+                    add_section(f"Worker {w_idx} Output", out_lines, color=MAGENTA)
+                vtab = verifiers.get(w_idx)
+                if vtab:
+                    v_lines = _tab_output_lines(vtab)
+                    if v_lines:
+                        add_section(f"Worker {w_idx} Verification", v_lines, color=MAGENTA)
 
         action_output = (entry.get("action_output") or "").rstrip()
         # Per-item full content sections for write_items (before action output

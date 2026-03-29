@@ -21,7 +21,7 @@ class _Tab:
                  "streaming", "spinner_label", "spinner_tick", "spinner_time",
                  "spinner_start", "spinner_tokens", "last_trace", "last_output",
                  "toml_pending", "toml_close_tag", "output_non_toml_seen",
-                 "output_toml_seen", "is_waiting",
+                 "output_toml_seen", "show_toml", "is_waiting",
                  "done", "task_description", "task_summary",
                  "worker_task", "worker_output",
                  "entries", "nav_idx",
@@ -50,6 +50,7 @@ class _Tab:
         self.toml_close_tag = ""
         self.output_non_toml_seen = False
         self.output_toml_seen = False
+        self.show_toml = False
         self.is_waiting = False
         self.done = False
         self.task_description = task_description

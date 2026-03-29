@@ -10,14 +10,14 @@ from pathlib import Path
 
 from openprover import __version__
 from .budget import Budget, parse_duration
-from .llm import CodexClient, HFClient, LLMClient
+from .llm import CodexClient, HFClient, LLMClient, MistralClient
 from .prover import Prover, slugify
 from .tui import TUI, HeadlessTUI
 
 SUBCOMMANDS = {"inspect", "fetch-lean-data"}
 
 RUN_CONFIG_FILE = "run_config.toml"
-PROVIDER_CHOICES = ("claude", "codex", "local")
+PROVIDER_CHOICES = ("claude", "codex", "local", "mistral")
 CLAUDE_MODELS = {"sonnet", "opus"}
 CLAUDE_REASONING_EFFORTS = {"low", "medium", "high", "max"}
 OPENAI_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
@@ -25,10 +25,15 @@ HF_MODEL_MAP = {
     "minimax-m2.5": "MiniMaxAI/MiniMax-M2.5",
 }
 VLLM_MODELS = set(HF_MODEL_MAP)
+MISTRAL_MODEL_MAP = {
+    "leanstral": "labs-leanstral-2603",
+}
+MISTRAL_MODELS = set(MISTRAL_MODEL_MAP)
 PROVIDER_DEFAULT_MODELS = {
     "claude": "sonnet",
     "codex": "codex",
     "local": "minimax-m2.5",
+    "mistral": "leanstral",
 }
 
 
@@ -43,7 +48,7 @@ def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
                      worker_reasoning_effort: str | None,
                      budget_mode: str, budget_limit: int,
                      conclude_after: float,
-                     parallelism: int, give_up_ratio: float,
+                     parallelism: int,
                      isolation: bool, autonomous: bool, mode: str,
                      lean_project_dir: Path | None, lean_items: bool,
                      lean_worker_tools: bool, provider_url: str,
@@ -61,7 +66,6 @@ def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
         f'budget_limit = {budget_limit}',
         f'conclude_after = {conclude_after}',
         f'parallelism = {parallelism}',
-        f'give_up_ratio = {give_up_ratio}',
         f'isolation = {str(isolation).lower()}',
         f'autonomous = {str(autonomous).lower()}',
         f'mode = "{mode}"',
@@ -295,6 +299,8 @@ def _infer_provider_from_model(model: str) -> str | None:
         return "claude"
     if model in HF_MODEL_MAP:
         return "local"
+    if model in MISTRAL_MODEL_MAP:
+        return "mistral"
     if model == "codex":
         return "codex"
     return None
@@ -357,7 +363,15 @@ def _resolve_provider_and_model(parser, *, provider: str | None,
             )
         return provider, model
 
-    if model in CLAUDE_MODELS or model in HF_MODEL_MAP:
+    if provider == "mistral":
+        if model not in MISTRAL_MODEL_MAP:
+            parser.error(
+                f"{role} provider 'mistral' currently requires one of: "
+                f"{', '.join(sorted(MISTRAL_MODEL_MAP))}"
+            )
+        return provider, model
+
+    if model in CLAUDE_MODELS or model in HF_MODEL_MAP or model in MISTRAL_MODEL_MAP:
         parser.error(
             f"{role} provider 'codex' requires an actual Codex model name "
             f"(for example 'gpt-5.4') or bare 'codex' for the CLI default, "
@@ -374,17 +388,19 @@ def _display_model(provider: str, model: str) -> str:
         return model
     if provider == "codex":
         return "codex cli" if model == "codex" else f"codex {model}"
+    if provider == "mistral":
+        return model
     return model
 
 
 def _is_tool_capable(provider: str, model: str) -> bool:
     """Whether a worker backend can use lean worker tools."""
-    return provider in {"claude", "codex"} or model in VLLM_MODELS
+    return provider in {"claude", "codex", "mistral"} or model in VLLM_MODELS
 
 
 def _default_reasoning_effort(provider: str, role: str) -> str | None:
     """Default reasoning effort by backend and role."""
-    if provider == "local":
+    if provider in {"local", "mistral"}:
         return None
     if role == "verifier":
         return "xhigh" if provider == "codex" else "max"
@@ -409,9 +425,9 @@ def _resolve_reasoning_effort(parser, *, provider: str,
             )
         return effort
 
-    if provider == "local":
+    if provider in {"local", "mistral"}:
         parser.error(
-            f"{role} provider 'local' does not support reasoning effort"
+            f"{role} provider {provider!r} does not support configurable reasoning effort"
         )
 
     if effort not in OPENAI_REASONING_EFFORTS:
@@ -456,9 +472,14 @@ def _cmd_prove():
     parser.add_argument("--read-only", action="store_true", help="Inspect run without resuming")
     parser.add_argument("--isolation", action=argparse.BooleanOptionalAction, default=True, help="Disable web searches (no literature_search action)")
     parser.add_argument("-P", "--parallelism", type=int, default=1, help="Max parallel workers per spawn step (default: 1)")
-    parser.add_argument("--give-up-after", type=float, default=0.5, metavar="RATIO", help="Fraction of budget before give_up action is allowed (default: 0.5)")
     parser.add_argument("--answer-reserve", type=int, default=4096, metavar="TOKENS", help="Tokens reserved for answer after thinking (default: 4096)")
     parser.add_argument("--history-budget", type=int, default=0, metavar="CHARS", help="Char budget for planner history (default: auto from model context)")
+    parser.add_argument("--effort", choices=["low", "medium", "high", "max"], default=None,
+                        help="Deprecated alias for --reasoning-effort on Claude backends")
+    parser.add_argument("--on-budget-out", choices=["backoff", "exit"], default="exit",
+                        help="Action when spending/rate limit hit: backoff = exponential retry, exit = stop immediately (default: exit; Claude models only)")
+    parser.add_argument("--on-rate-limited", choices=["backoff", "exit"], default="backoff",
+                        help="Action on HTTP 429: backoff = exponential retry, exit = stop immediately (default: backoff)")
     parser.add_argument("--headless", action="store_true", help="Non-interactive mode (logs to stdout, errors to stderr)")
     parser.add_argument("--verbose", action="store_true", help="Show full LLM responses")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -520,8 +541,6 @@ def _cmd_prove():
                 args.conclude_after = saved.get("conclude_after", args.conclude_after)
             if not _cli_flag_given("-P", "--parallelism"):
                 args.parallelism = saved.get("parallelism", args.parallelism)
-            if not _cli_flag_given("--give-up-after"):
-                args.give_up_after = saved.get("give_up_ratio", args.give_up_after)
             if not _cli_flag_given("--isolation", "--no-isolation"):
                 args.isolation = saved.get("isolation", args.isolation)
             if not _cli_flag_given("--autonomous"):
@@ -560,6 +579,19 @@ def _cmd_prove():
     if args.lean_items and not args.lean_project:
         parser.error("--lean-items requires --lean-project (verification needs a Lean project)")
 
+    if args.effort is not None and any(
+        _cli_flag_given(flag) for flag in (
+            "--reasoning-effort",
+            "--planner-reasoning-effort",
+            "--worker-reasoning-effort",
+        )
+    ):
+        parser.error(
+            "cannot combine --effort with --reasoning-effort, "
+            "--planner-reasoning-effort, or --worker-reasoning-effort"
+        )
+    shared_reasoning_effort = args.reasoning_effort or args.effort
+
     # Resolve effective planner/worker providers and models
     planner_provider, planner_model = _resolve_provider_and_model(
         parser,
@@ -580,13 +612,13 @@ def _cmd_prove():
     planner_reasoning_effort = _resolve_reasoning_effort(
         parser,
         provider=planner_provider,
-        reasoning_effort=(args.planner_reasoning_effort or args.reasoning_effort),
+        reasoning_effort=(args.planner_reasoning_effort or shared_reasoning_effort),
         role="planner",
     )
     worker_reasoning_effort = _resolve_reasoning_effort(
         parser,
         provider=worker_provider,
-        reasoning_effort=(args.worker_reasoning_effort or args.reasoning_effort),
+        reasoning_effort=(args.worker_reasoning_effort or shared_reasoning_effort),
         role="worker",
     )
     verifier_reasoning_effort = _default_reasoning_effort(
@@ -594,8 +626,37 @@ def _cmd_prove():
         "verifier",
     )
 
-    # Local HTTP-backed models have no web search capability - force isolation
-    if planner_provider == "local" and not args.isolation:
+    if args.effort is not None:
+        non_claude = [
+            role for role, provider in (
+                ("planner", planner_provider),
+                ("worker", worker_provider),
+            )
+            if provider != "claude"
+        ]
+        if non_claude:
+            parser.error(
+                f"--effort is only supported for Claude backends; "
+                f"got non-Claude roles: {', '.join(non_claude)}"
+            )
+
+    # --on-budget-out is only meaningful for Claude models
+    if _cli_flag_given("--on-budget-out"):
+        non_claude = [
+            role for role, provider in (
+                ("planner", planner_provider),
+                ("worker", worker_provider),
+            )
+            if provider != "claude"
+        ]
+        if non_claude:
+            parser.error(
+                f"--on-budget-out is only supported for Claude backends; "
+                f"got non-Claude roles: {', '.join(non_claude)}"
+            )
+
+    # Local OpenAI-compatible and Mistral backends have no web search capability.
+    if planner_provider in {"local", "mistral"} and not args.isolation:
         args.isolation = True
 
     if args.headless:
@@ -624,7 +685,7 @@ def _cmd_prove():
         if not _is_tool_capable(worker_provider, worker_model):
             parser.error(
                 "--lean-worker-tools requires a tool-capable worker backend "
-                "(claude, codex, or local minimax-m2.5)"
+                "(claude, codex, mistral, or local minimax-m2.5)"
             )
         # Auto-fetch Lean Explore data if not available
         from .lean.data import is_lean_data_available, fetch_lean_data
@@ -643,6 +704,9 @@ def _cmd_prove():
             return CodexClient(model_alias, archive_dir,
                                answer_reserve=args.answer_reserve,
                                reasoning_effort=reasoning_effort)
+        if provider == "mistral":
+            return MistralClient(MISTRAL_MODEL_MAP[model_alias], archive_dir,
+                                 answer_reserve=args.answer_reserve)
         return LLMClient(model_alias, archive_dir,
                          reasoning_effort=reasoning_effort)
 
@@ -693,7 +757,6 @@ def _cmd_prove():
         mode=budget_mode,
         limit=budget_limit,
         conclude_after=args.conclude_after,
-        give_up_after=args.give_up_after,
     )
 
     # Save config on fresh start
@@ -711,7 +774,6 @@ def _cmd_prove():
             budget_limit=budget_limit,
             conclude_after=args.conclude_after,
             parallelism=args.parallelism,
-            give_up_ratio=args.give_up_after,
             isolation=args.isolation,
             autonomous=args.autonomous,
             mode=mode,
@@ -744,6 +806,8 @@ def _cmd_prove():
         lean_items=args.lean_items,
         lean_worker_tools=args.lean_worker_tools,
         history_budget=args.history_budget,
+        on_budget_out=args.on_budget_out,
+        on_rate_limited=args.on_rate_limited,
     )
 
     # Clear the early status line before TUI takes over

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timezone
@@ -17,6 +18,19 @@ from .tui import TUI
 from .tui._colors import YELLOW, GREEN, RESET as _RESET
 
 logger = logging.getLogger("openprover")
+
+
+def _use_thinking_as_result(resp: dict) -> dict:
+    """If result is empty but thinking has content, use thinking as result.
+
+    Some models (e.g. Mistral/Leanstral) occasionally put all output into the
+    thinking trace and produce an empty result.  Fall back to thinking so that
+    downstream parsing (TOML, verdicts, etc.) can still work.
+    """
+    if not resp.get("result") and resp.get("thinking"):
+        resp = dict(resp)  # shallow copy
+        resp["result"] = resp["thinking"]
+    return resp
 
 
 def _format_tool_calls_toml(tc_log: list[dict]) -> str:
@@ -179,7 +193,9 @@ class Prover:
                  make_verifier_llm=None,
                  lean_items: bool = False,
                  lean_worker_tools: bool = False,
-                 history_budget: int = 0):
+                 history_budget: int = 0,
+                 on_budget_out: str | None = None,
+                 on_rate_limited: str | None = None):
         self.model = model_name
         self._make_llm = make_llm
         self._make_worker_llm = make_worker_llm or make_llm
@@ -187,6 +203,11 @@ class Prover:
         self.lean_items = lean_items
         self.lean_worker_tools = lean_worker_tools
         self._history_budget_override = history_budget
+        self.on_budget_out = on_budget_out  # "backoff", "exit", or None
+        self.on_rate_limited = on_rate_limited  # "backoff", "exit", or None
+        self._spending_limit_hit = False
+        self._backoff_delay = 4  # seconds, escalates: 4 → 16 → 64 (stays at 64)
+        self._rate_limit_backoff = 4  # separate backoff for --on-rate-limited
         self.budget = budget
         self.autonomous = autonomous
         self.verbose = verbose
@@ -197,11 +218,12 @@ class Prover:
         self._workers_active = False
         self._interrupt_count = 0
         self._last_interrupt_time = 0.0
+        self._interrupt_lock = threading.Lock()
         self.step_num = 0
         self._step_idx = 0
         self.step_history: list[dict] = []  # rolling window of last 3 steps
         self._current_planner_result = ""
-        self._current_action_output = ""
+        self._current_action_outputs: list[dict] = []
         self.proof_text = ""
         self.resumed = resumed
         self._respawn_plan = None  # set on resume if last step was interrupted spawn
@@ -291,8 +313,8 @@ class Prover:
                 self.worker_llm.mcp_config = mcp_config
                 logger.info("%s MCP tool calling configured",
                             type(self.worker_llm).__name__)
-            elif getattr(self.worker_llm, 'vllm', False):
-                # vLLM: initialize LeanExplore for in-process tool execution
+            elif getattr(self.worker_llm, 'vllm', False) or getattr(self.worker_llm, 'mistral', False):
+                # vLLM / Mistral: initialize LeanExplore for in-process tool execution
                 try:
                     from lean_explore.search import SearchEngine, Service
                     engine = SearchEngine(use_local_data=False)
@@ -304,7 +326,7 @@ class Prover:
                     logger.warning("LeanExplore init failed: %s", e)
             else:
                 logger.warning(
-                    "lean_worker_tools enabled but worker has no MCP/vLLM "
+                    "lean_worker_tools enabled but worker has no MCP/vLLM/Mistral "
                     "tool support - tools disabled"
                 )
 
@@ -317,10 +339,14 @@ class Prover:
                 parts.append(stripped)
         self.theorem_name = " ".join(parts)
 
-    def _stream_cb(self, tab: str):
+    def _stream_cb(self, tab: str, output_only: bool = False):
         if not self.tui.supports_streaming:
             return None
-        return lambda t, k="text": self.tui.stream_text(t, kind=k, tab=tab)
+        def cb(t, k="text"):
+            if output_only and k == "thinking":
+                return
+            self.tui.stream_text(t, kind=k, tab=tab, show_toml=output_only)
+        return cb
 
     def _setup_tui(self, *, autonomous: bool = False):
         """Initialize TUI with common state for both run() and inspect()."""
@@ -337,7 +363,6 @@ class Prover:
             "model": self.model,
             "budget": self.budget.limit_str(),
             "conclude_after": f"{self.budget.conclude_after:.0%}",
-            "give_up_after": f"{self.budget.give_up_after:.0%}",
             "parallelism": str(self.parallelism),
             "isolation": "on" if self.isolation else "off",
             "mode": self.mode,
@@ -356,10 +381,10 @@ class Prover:
             )
             self._maybe_respawn_interrupted_workers()
 
-        while not self.budget.is_exhausted() and not self.shutting_down:
+        while not self.budget.is_exhausted() and not self.shutting_down and not self._spending_limit_hit:
             self.step_num += 1
             self._current_planner_result = ""
-            self._current_action_output = ""
+            self._current_action_outputs = []
             self._current_step_action = ""
             self._current_step_summary = ""
             result = self._do_step()
@@ -370,7 +395,7 @@ class Prover:
                     "planner": self._current_planner_result,
                     "action": self._current_step_action,
                     "summary": self._current_step_summary,
-                    "output": self._current_action_output,
+                    "outputs": self._current_action_outputs,
                 })
                 if len(self.step_history) > 3:
                     self.step_history = self.step_history[-3:]
@@ -387,10 +412,12 @@ class Prover:
     def _push_output(self, text: str):
         """Store action output for the current step's history entry."""
         if text:
-            if self._current_action_output:
-                self._current_action_output += "\n\n" + text
-            else:
-                self._current_action_output = text
+            if self._current_action_outputs:
+                entry = self._current_action_outputs[-1]
+                if entry["output"]:
+                    entry["output"] += "\n\n" + text
+                else:
+                    entry["output"] = text
             self.tui.append_step_action_output(self.step_num, text)
 
     def _save_step_history(self):
@@ -570,6 +597,7 @@ class Prover:
             step_history=list(self.step_history),
             budget_status=self.budget.summary_str(),
             parallelism=self.parallelism,
+            theorem_text=self.theorem_text,
             has_lean_theorem=bool(self.lean_theorem_text),
             has_proof_md=(self.work_dir / "PROOF.md").exists(),
             has_proof_lean=(self.work_dir / "PROOF.lean").exists(),
@@ -580,7 +608,6 @@ class Prover:
         MAX_PARSE_RETRIES = 2
         system_prompt = prompts.planner_system_prompt(
             isolation=self.isolation,
-            allow_give_up=self.budget.allow_give_up(),
             lean_mode=self.mode,
             lean_items=self.lean_items,
         )
@@ -601,31 +628,37 @@ class Prover:
 
             retry_suffix = "" if attempt == 0 else f"_retry_{attempt}"
             label = "planning" if attempt == 0 else f"retrying ({attempt}/{MAX_PARSE_RETRIES})"
-            self.tui.stream_start(label, tab="planner")
-            try:
-                resp = self.planner_llm.call(
-                    prompt=call_prompt,
-                    system_prompt=system_prompt,
-                    label=f"planner_step_{self.step_num}{retry_suffix}",
-                    stream_callback=self._stream_cb("planner"),
-                    archive_path=step_dir / f"planner_call{retry_suffix}.md",
-                )
-            except Interrupted:
-                self.tui.stream_end(tab="planner")
-                logger.info("Planner interrupted")
-                return self._handle_interrupt(step_dir)
-            except QuotaExceeded as e:
-                self.tui.stream_end(tab="planner")
-                return self._handle_quota_exceeded(
-                    step_dir, action="planner", error=str(e),
-                )
-            except RuntimeError as e:
-                self.tui.stream_end(tab="planner")
-                logger.error("Planner error: %s", e)
-                self.tui.log(f"Error: {e}", color="red")
-                self._save_step_meta(step_dir, status="llm_error", error=str(e))
-                return "continue"
+            while True:
+                self.tui.stream_start(label, tab="planner")
+                try:
+                    resp = self.planner_llm.call(
+                        prompt=call_prompt,
+                        system_prompt=system_prompt,
+                        label=f"planner_step_{self.step_num}{retry_suffix}",
+                        stream_callback=self._stream_cb("planner"),
+                        archive_path=step_dir / f"planner_call{retry_suffix}.md",
+                    )
+                    break  # success
+                except Interrupted:
+                    self.tui.stream_end(tab="planner")
+                    logger.info("Planner interrupted")
+                    return self._handle_interrupt(step_dir)
+                except QuotaExceeded as e:
+                    self.tui.stream_end(tab="planner")
+                    return self._handle_quota_exceeded(
+                        step_dir, action="planner", error=str(e),
+                    )
+                except RuntimeError as e:
+                    self.tui.stream_end(tab="planner")
+                    logger.error("Planner error: %s", e)
+                    self.tui.log(f"Error: {e}", color="red")
+                    action = self._check_error_policy(e)
+                    if action == "retry":
+                        continue
+                    self._save_step_meta(step_dir, status="llm_error", error=str(e))
+                    return action  # "stop" or "continue"
             self.tui.stream_end(tab="planner")
+            resp = _use_thinking_as_result(resp)
             self._track_output_tokens(resp)
             last_resp = resp
             logger.info("Planner: %dms $%.4f",
@@ -653,33 +686,62 @@ class Prover:
                 if finish in ("length", "max_tokens") and attempt == 0:
                     logger.info("Planner truncated (finish_reason=%s) - Phase 2", finish)
                     self.tui.log("Planner output truncated - forcing decision...", color="yellow")
-                    phase2_prompt = prompts.format_planner_truncated(prompt, resp["result"])
-                    self.tui.stream_start("forcing decision", tab="planner")
-                    try:
-                        phase2_max = getattr(self.planner_llm, 'answer_reserve', 4096)
-                        resp = self.planner_llm.call(
-                            prompt=phase2_prompt,
-                            system_prompt=system_prompt,
-                            label=f"planner_step_{self.step_num}_phase2",
-                            stream_callback=self._stream_cb("planner"),
-                            archive_path=step_dir / "planner_call_phase2.md",
-                            **({"max_tokens": phase2_max} if hasattr(self.planner_llm, 'answer_reserve') else {}),
-                        )
-                    except Interrupted:
-                        self.tui.stream_end(tab="planner")
-                        return self._handle_interrupt(step_dir)
-                    except QuotaExceeded as e:
-                        self.tui.stream_end(tab="planner")
-                        return self._handle_quota_exceeded(
-                            step_dir, action="planner", error=str(e), resp=last_resp,
-                        )
-                    except RuntimeError as e:
-                        self.tui.stream_end(tab="planner")
-                        logger.error("Phase 2 error: %s", e)
-                        self.tui.log(f"Error: {e}", color="red")
-                        self._save_step_meta(step_dir, status="llm_error", error=str(e))
-                        return "continue"
+                    while True:
+                        self.tui.stream_start("forcing decision", tab="planner")
+                        try:
+                            phase2_max = getattr(self.planner_llm, 'answer_reserve', None) or 16_000
+                            conv_id = resp.get("conversation_id")
+                            if conv_id and hasattr(self.planner_llm, 'chat'):
+                                messages = [
+                                    {"role": "system", "content": system_prompt},
+                                    {"role": "user", "content": prompt},
+                                    {"role": "assistant", "content": resp["result"] or ""},
+                                    {"role": "user", "content": (
+                                        "Your response was cut off. Write your final "
+                                        "decision now — output ONLY the "
+                                        "<OPENPROVER_ACTION>...</OPENPROVER_ACTION> block."
+                                    )},
+                                ]
+                                resp = self.planner_llm.chat(
+                                    messages=messages,
+                                    tools=None,
+                                    max_tokens=phase2_max,
+                                    label=f"planner_step_{self.step_num}_phase2",
+                                    stream_callback=self._stream_cb("planner", output_only=True),
+                                    archive_path=step_dir / "planner_call_phase2.md",
+                                    conversation_id=conv_id,
+                                )
+                            else:
+                                phase2_prompt = prompts.format_planner_truncated(prompt, resp["result"])
+                                resp = self.planner_llm.call(
+                                    prompt=phase2_prompt,
+                                    system_prompt=system_prompt,
+                                    label=f"planner_step_{self.step_num}_phase2",
+                                    stream_callback=self._stream_cb("planner", output_only=True),
+                                    archive_path=step_dir / "planner_call_phase2.md",
+                                    max_tokens=phase2_max,
+                                    no_thinking=True,
+                                )
+                            break  # success
+                        except Interrupted:
+                            self.tui.stream_end(tab="planner")
+                            return self._handle_interrupt(step_dir)
+                        except QuotaExceeded as e:
+                            self.tui.stream_end(tab="planner")
+                            return self._handle_quota_exceeded(
+                                step_dir, action="planner", error=str(e), resp=last_resp,
+                            )
+                        except RuntimeError as e:
+                            self.tui.stream_end(tab="planner")
+                            logger.error("Phase 2 error: %s", e)
+                            self.tui.log(f"Error: {e}", color="red")
+                            action = self._check_error_policy(e)
+                            if action == "retry":
+                                continue
+                            self._save_step_meta(step_dir, status="llm_error", error=str(e))
+                            return action
                     self.tui.stream_end(tab="planner")
+                    resp = _use_thinking_as_result(resp)
                     self._track_output_tokens(resp)
                     last_resp = resp
                     plans = prompts.parse_planner_toml(resp["result"])
@@ -757,7 +819,7 @@ class Prover:
         """Execute a list of parsed action plans sequentially.
 
         Low-impact actions (write_whiteboard, read_items, read_theorem, write_items)
-        are executed inline. Heavy actions (spawn, literature_search, submit, give_up)
+        are executed inline. Heavy actions (spawn, literature_search, submit)
         run their own logic and may save step metadata themselves.
 
         Processing stops early only when an action returns "stop" (session
@@ -771,6 +833,11 @@ class Prover:
         for plan in plans:
             action = plan["action"]
             last_action = action
+            self._current_action_outputs.append({
+                "action": action,
+                "summary": plan.get("summary", ""),
+                "output": "",
+            })
 
             if action == "write_whiteboard":
                 self._handle_write_whiteboard(plan)
@@ -785,8 +852,6 @@ class Prover:
                 result = self._handle_submit_proof(plan, step_dir)
             elif action == "submit_lean_proof":
                 result = self._handle_submit_lean_proof(plan, step_dir)
-            elif action == "give_up":
-                result = self._handle_give_up()
             elif action == "spawn":
                 # spawn and literature_search save their own meta (include worker details)
                 result = self._handle_spawn(plan, step_dir, resp)
@@ -870,7 +935,12 @@ class Prover:
                 error="Rejected by user feedback",
                 feedback=text,
             )
-            self._push_output(f"Human feedback: {user_resp}")
+            self._current_action_outputs.append({
+                "action": "rejected",
+                "summary": "User rejected and provided feedback",
+                "output": f"Human feedback: {user_resp}",
+            })
+            self.tui.append_step_action_output(self.step_num, f"Human feedback: {user_resp}")
             self.tui.show_replan_notice("Feedback noted - will replan next step")
             return "continue"
 
@@ -932,7 +1002,6 @@ class Prover:
                 interrupted=True,
                 feedback=text,
             )
-            self._push_output(f"Human feedback: {user_resp}")
             # Include partial planner output + feedback in history so next
             # planner call sees what was interrupted and the user's guidance.
             feedback_text = f"Human feedback: {user_resp}" if text else ""
@@ -941,7 +1010,7 @@ class Prover:
                 "planner": f"(interrupted) {partial}".strip(),
                 "action": "interrupted",
                 "summary": "User interrupted and provided feedback",
-                "output": feedback_text,
+                "outputs": [{"action": "interrupted", "summary": "User feedback", "output": feedback_text}],
             })
             if len(self.step_history) > 3:
                 self.step_history = self.step_history[-3:]
@@ -1056,19 +1125,6 @@ class Prover:
 
         self._push_output(feedback)
         return "continue"
-
-    def _handle_give_up(self) -> str:
-        if not self.budget.allow_give_up():
-            pct = int(self.budget.fraction_spent() * 100)
-            self.tui.log(
-                f"Not giving up - only {pct}% of budget spent",
-                color="yellow",
-            )
-            self._push_output("give_up rejected: too much budget remaining. Keep trying.")
-            return "continue"
-        logger.info("Giving up at step %d (budget %s)", self.step_num, self.budget.status_str())
-        self.tui.log("Stuck - no more ideas.", color="yellow")
-        return "stop"
 
     def _handle_read_items(self, plan: dict):
         slugs = plan.get("read", [])
@@ -1255,6 +1311,10 @@ class Prover:
                                 "result": f"Worker error: {e}", "cost": 0.0,
                                 "duration_ms": 0, "raw": {}, "error": str(e),
                             }
+                        wresp = worker_resps[idx]
+                        if wresp.get("error") and wresp["error"] != "interrupted":
+                            self.tui.tab_log(worker_ids[idx],
+                                             f"Error: {wresp['error']}", color="red")
                         done_count += 1
                         logger.info("Worker %d/%d done", done_count, n)
                         self.tui.mark_worker_done(worker_ids[idx])
@@ -1387,6 +1447,13 @@ class Prover:
         verdicts = {}
         for i, vresp in verifier_resps.items():
             verdict = prompts.extract_verdict(vresp.get("result", ""))
+            if not verdict and not vresp.get("error"):
+                verdict = "VERDICT: UNFINISHED - verification did not complete"
+                # Append notice to the result so the planner sees it too
+                vresp["result"] = (
+                    (vresp.get("result") or "")
+                    + "\n\n[Verifier output was incomplete — no verdict produced.]"
+                )
             if verdict:
                 verdicts[i] = verdict
         self.tui.step_entries[self._step_idx]["verdicts"] = verdicts
@@ -1450,54 +1517,61 @@ class Prover:
         if context:
             self.tui.tab_log(wid, f"Context: {context}", dim=True)
         self.tui.tab_log(wid, "")
-        self.tui.stream_start("searching", tab=wid)
         search_resp = None
-        try:
-            search_resp = self.worker_llm.call(
-                prompt=prompt,
-                system_prompt=prompts.SEARCH_SYSTEM_PROMPT,
-                label=f"search_step_{self.step_num}",
-                web_search=True,
-                stream_callback=self._stream_cb(wid),
-                archive_path=workers_dir / "search_call.md",
-            )
-            self.tui.stream_end(tab=wid)
-            self._track_output_tokens(search_resp)
-            result = search_resp["result"]
-            search_resp["error"] = ""
-            self._push_output(result)
-            (workers_dir / "result_0.md").write_text(result)
-        except Interrupted:
-            self.tui.stream_end(tab=wid)
-            self.worker_llm.clear_interrupt()
-            self.verifier_llm.clear_interrupt()
-            self.tui.update_step_status(
-                self._step_idx,
-                interrupted=True,
-                detail_append="Execution interrupted before literature search completed.",
-            )
-            if self.autonomous:
-                self.autonomous = False
-                self.tui.autonomous = False
-                self.tui.log("Interrupted - switching to manual mode", color="yellow")
-            result = "(terminated by user)"
-            self._push_output(result)
-            search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
-                           "raw": {}, "error": "interrupted"}
-        except QuotaExceeded as e:
-            self.tui.stream_end(tab=wid)
-            result = f"Literature search failed: {e}"
-            self.tui.log(f"Search error: {e}", color="red")
-            self._push_output(result)
-            search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
-                           "raw": {}, "error": "quota_exceeded"}
-        except RuntimeError as e:
-            self.tui.stream_end(tab=wid)
-            result = f"Literature search failed: {e}"
-            self.tui.log(f"Search error: {e}", color="red")
-            self._push_output(result)
-            search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
-                           "raw": {}, "error": str(e)}
+        while True:
+            self.tui.stream_start("searching", tab=wid)
+            try:
+                search_resp = self.worker_llm.call(
+                    prompt=prompt,
+                    system_prompt=prompts.SEARCH_SYSTEM_PROMPT,
+                    label=f"search_step_{self.step_num}",
+                    web_search=True,
+                    stream_callback=self._stream_cb(wid),
+                    archive_path=workers_dir / "search_call.md",
+                )
+                self.tui.stream_end(tab=wid)
+                self._track_output_tokens(search_resp)
+                result = search_resp["result"]
+                search_resp["error"] = ""
+                self._push_output(result)
+                (workers_dir / "result_0.md").write_text(result)
+                break
+            except Interrupted:
+                self.tui.stream_end(tab=wid)
+                self.worker_llm.clear_interrupt()
+                self.verifier_llm.clear_interrupt()
+                self.tui.update_step_status(
+                    self._step_idx,
+                    interrupted=True,
+                    detail_append="Execution interrupted before literature search completed.",
+                )
+                if self.autonomous:
+                    self.autonomous = False
+                    self.tui.autonomous = False
+                    self.tui.log("Interrupted - switching to manual mode", color="yellow")
+                result = "(terminated by user)"
+                self._push_output(result)
+                search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
+                               "raw": {}, "error": "interrupted"}
+                break
+            except QuotaExceeded as e:
+                self.tui.stream_end(tab=wid)
+                result = f"Literature search failed: {e}"
+                self.tui.log(f"Search error: {e}", color="red")
+                self._push_output(result)
+                search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
+                               "raw": {}, "error": "quota_exceeded"}
+                break
+            except RuntimeError as e:
+                self.tui.stream_end(tab=wid)
+                if self._check_error_policy(e) == "retry":
+                    continue
+                result = f"Literature search failed: {e}"
+                self.tui.log(f"Search error: {e}", color="red")
+                self._push_output(result)
+                search_resp = {"result": result, "cost": 0.0, "duration_ms": 0,
+                               "raw": {}, "error": str(e)}
+                break
         self.tui.set_waiting_status("")
 
         if search_resp and search_resp.get("error") == "quota_exceeded":
@@ -1531,11 +1605,12 @@ class Prover:
         resolved_refs = self.repo.resolve_wikilinks(description)
         prompt = prompts.format_worker_prompt(description, resolved_refs)
         use_vllm_tools = self.lean_worker_tools and getattr(self.worker_llm, 'vllm', False)
+        use_mistral_tools = self.lean_worker_tools and getattr(self.worker_llm, 'mistral', False)
         use_mcp_tools = self.lean_worker_tools and getattr(self.worker_llm, 'mcp_config', None)
-        use_tools = use_vllm_tools or use_mcp_tools
+        use_tools = use_vllm_tools or use_mistral_tools or use_mcp_tools
         system_prompt = prompts.worker_system_prompt(lean_worker_tools=use_tools)
 
-        if use_vllm_tools:
+        if use_vllm_tools or use_mistral_tools:
             return self._run_worker_multi_turn(
                 prompt, system_prompt, worker_id, archive_path,
             )
@@ -1562,72 +1637,118 @@ class Prover:
             })
             self.tui.add_worker_action(worker_id, name, tool_input, result, status, duration_ms)
 
-        self.tui.stream_start("working...", tab=worker_id)
-        try:
-            resp = self.worker_llm.call(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                label=worker_id,
-                stream_callback=self._stream_cb(worker_id),
-                archive_path=archive_path,
-                tool_callback=_tool_cb if use_mcp_tools else None,
-                tool_start_callback=_tool_start_cb if use_mcp_tools else None,
-            )
-            self.tui.stream_end(tab=worker_id)
-
-            # Phase 2 if truncated or soft-interrupted
-            if resp.get("finish_reason") in ("length", "max_tokens", "soft_interrupted"):
-                reason = resp["finish_reason"]
-                logger.info("[%s] %s - Phase 2", worker_id, reason)
-                if reason == "soft_interrupted":
-                    self.worker_llm.clear_soft_interrupt()
-                label = "interrupted - forcing output..." if reason == "soft_interrupted" else "forcing output..."
-                self.tui.stream_start(label, tab=worker_id)
-                answer_reserve = getattr(self.worker_llm, 'answer_reserve', 4096)
-                phase2_prompt = (
-                    f"{prompt}\n\n---\n\n"
-                    f"Your previous reasoning was cut off. Continue with your final answer.\n\n"
-                    f"Previous output (last 2000 chars):\n"
-                    f"```\n{resp['result'][-2000:]}\n```"
-                )
-                resp2 = self.worker_llm.call(
-                    prompt=phase2_prompt,
+        while True:
+            self.tui.stream_start("working...", tab=worker_id)
+            try:
+                resp = self.worker_llm.call(
+                    prompt=prompt,
                     system_prompt=system_prompt,
-                    label=f"{worker_id}_phase2",
+                    label=worker_id,
                     stream_callback=self._stream_cb(worker_id),
-                    archive_path=archive_path.parent / f"{archive_path.stem}_phase2.md" if archive_path else None,
-                    max_tokens=answer_reserve,
+                    archive_path=archive_path,
+                    tool_callback=_tool_cb if use_mcp_tools else None,
+                    tool_start_callback=_tool_start_cb if use_mcp_tools else None,
                 )
                 self.tui.stream_end(tab=worker_id)
-                resp = {
-                    "result": resp2["result"],
-                    "thinking": resp["thinking"] + resp2.get("thinking", ""),
-                    "cost": resp["cost"] + resp2["cost"],
-                    "duration_ms": resp["duration_ms"] + resp2["duration_ms"],
-                    "raw": resp2["raw"],
-                    "finish_reason": resp2.get("finish_reason", "stop"),
-                }
+                resp = _use_thinking_as_result(resp)
+                # Phase 2 if truncated or soft-interrupted
+                if resp.get("finish_reason") in ("length", "max_tokens", "soft_interrupted"):
+                    reason = resp["finish_reason"]
+                    logger.info("[%s] %s - Phase 2", worker_id, reason)
+                    if reason == "soft_interrupted":
+                        self.worker_llm.clear_soft_interrupt()
+                    label = "interrupted - forcing output..." if reason == "soft_interrupted" else "forcing output..."
+                    self.tui.stream_start(label, tab=worker_id)
+                    answer_reserve = getattr(self.worker_llm, 'answer_reserve', None)
+                    phase2_max = answer_reserve or 16_000
 
-            resp["error"] = ""
-        except Interrupted:
-            self.tui.stream_end(tab=worker_id)
-            logger.info("[%s] interrupted", worker_id)
-            resp = {"result": "(terminated by user)", "cost": 0.0,
-                    "duration_ms": 0, "raw": {}, "error": "interrupted"}
-        except QuotaExceeded as e:
-            self.tui.stream_end(tab=worker_id)
-            resp = {"result": f"Worker error: {e}", "cost": 0.0,
-                    "duration_ms": 0, "raw": {}, "error": "quota_exceeded"}
-        except RuntimeError as e:
-            self.tui.stream_end(tab=worker_id)
-            resp = {"result": f"Worker error: {e}", "cost": 0.0,
-                    "duration_ms": 0, "raw": {}, "error": str(e)}
+                    conv_id = resp.get("conversation_id")
+                    if conv_id and hasattr(self.worker_llm, 'chat'):
+                        # Mistral: continue the conversation to preserve thinking context
+                        messages = [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt},
+                            {"role": "assistant", "content": resp["result"] or ""},
+                            {"role": "user", "content": (
+                                "Your response was cut off. Write your final answer now. "
+                                "Output only the answer — no re-reasoning, no backtracking, no narration."
+                            )},
+                        ]
+                        resp2 = self.worker_llm.chat(
+                            messages=messages,
+                            tools=None,
+                            max_tokens=phase2_max,
+                            label=f"{worker_id}_phase2",
+                            stream_callback=self._stream_cb(worker_id, output_only=True),
+                            archive_path=archive_path.parent / f"{archive_path.stem}_phase2.md" if archive_path else None,
+                            conversation_id=conv_id,
+                        )
+                    else:
+                        # Claude CLI / others: fresh call with context snippet
+                        phase2_prompt = (
+                            f"{prompt}\n\n---\n\n"
+                            f"Your previous reasoning was cut off. Write your final answer now. "
+                            f"Output only the answer — no re-reasoning, no backtracking, no narration.\n\n"
+                            f"Previous output (last 2000 chars):\n"
+                            f"```\n{resp['result'][-2000:]}\n```"
+                        )
+                        resp2 = self.worker_llm.call(
+                            prompt=phase2_prompt,
+                            system_prompt=system_prompt,
+                            label=f"{worker_id}_phase2",
+                            stream_callback=self._stream_cb(worker_id, output_only=True),
+                            archive_path=archive_path.parent / f"{archive_path.stem}_phase2.md" if archive_path else None,
+                            max_tokens=phase2_max,
+                            no_thinking=True,
+                        )
+                    self.tui.stream_end(tab=worker_id)
+                    resp = {
+                        "result": resp2["result"],
+                        "thinking": resp["thinking"] + resp2.get("thinking", ""),
+                        "cost": resp["cost"] + resp2["cost"],
+                        "duration_ms": resp["duration_ms"] + resp2["duration_ms"],
+                        "raw": resp2["raw"],
+                        "finish_reason": resp2.get("finish_reason", "stop"),
+                    }
+
+                resp["error"] = ""
+                break  # success
+            except Interrupted:
+                self.tui.stream_end(tab=worker_id)
+                logger.info("[%s] interrupted", worker_id)
+                resp = {"result": "(terminated by user)", "cost": 0.0,
+                        "duration_ms": 0, "raw": {}, "error": "interrupted"}
+                break
+            except QuotaExceeded as e:
+                self.tui.stream_end(tab=worker_id)
+                resp = {"result": f"Worker error: {e}", "cost": 0.0,
+                        "duration_ms": 0, "raw": {}, "error": "quota_exceeded"}
+                break
+            except RuntimeError as e:
+                self.tui.stream_end(tab=worker_id)
+                action = self._check_error_policy(e)
+                if action == "retry":
+                    continue
+                self.tui.tab_log(worker_id, f"Error: {e}", color="red")
+                resp = {"result": f"Worker error: {e}", "cost": 0.0,
+                        "duration_ms": 0, "raw": {}, "error": str(e)}
+                break
         resp["tool_calls_log"] = tool_calls_log
         return resp
 
+    @staticmethod
+    def _estimate_messages_chars(messages: list[dict]) -> int:
+        """Estimate the total character count of a message list."""
+        total = 0
+        for msg in messages:
+            total += len(msg.get("content") or "")
+            for tc in msg.get("tool_calls") or []:
+                total += len(tc.get("function", {}).get("arguments", ""))
+        return total
+
     def _run_worker_multi_turn(self, prompt: str, system_prompt: str,
                                worker_id: str, archive_path: Path | None) -> dict:
-        """Multi-turn tool-calling worker (vLLM)."""
+        """Multi-turn tool-calling worker (vLLM/Mistral)."""
         tool_calls_log: list[dict] = []
         messages = [
             {"role": "system", "content": system_prompt},
@@ -1636,24 +1757,76 @@ class Prover:
         total_cost = 0.0
         total_duration = 0
         call_idx = 0
+        conversation_id = None  # Mistral stateful conversation
+
+        # Context limit: reserve space for the model's response.
+        # ~4 chars per token is a rough estimate.
+        ctx_length = getattr(self.worker_llm, 'context_length', 200_000)
+        answer_reserve = getattr(self.worker_llm, 'answer_reserve', 4096)
+        # Leave room for answer + thinking in the context window
+        max_input_chars = (ctx_length - answer_reserve) * 4
 
         try:
             while True:
+                # Check context length before calling the API
+                msg_chars = self._estimate_messages_chars(messages)
+                if msg_chars > max_input_chars:
+                    logger.warning(
+                        "[%s] context nearly full (%d chars > %d limit) — forcing output",
+                        worker_id, msg_chars, max_input_chars,
+                    )
+                    self.tui.tab_log(worker_id, "Context nearly full — wrapping up", color="yellow")
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You are running out of context space. Write your final "
+                            "answer NOW based on what you have so far. Do not make "
+                            "any more tool calls."
+                        ),
+                    })
+                    self.tui.stream_start("forcing output (context limit)...", tab=worker_id)
+                    phase2_kwargs = {}
+                    if conversation_id:
+                        phase2_kwargs["conversation_id"] = conversation_id
+                    resp = self.worker_llm.chat(
+                        messages=messages,
+                        tools=None,
+                        max_tokens=answer_reserve,
+                        label=f"{worker_id}_context_limit",
+                        stream_callback=self._stream_cb(worker_id, output_only=True),
+                        archive_path=(
+                            archive_path.parent / f"{archive_path.stem}_context_limit.md"
+                            if archive_path else None
+                        ),
+                        **phase2_kwargs,
+                    )
+                    self.tui.stream_end(tab=worker_id)
+                    total_cost += resp["cost"]
+                    total_duration += resp["duration_ms"]
+                    break
+
                 self.tui.stream_start("working..." if call_idx == 0 else "continuing...", tab=worker_id)
                 call_archive = (
                     archive_path.parent / f"{archive_path.stem}_{call_idx}.md"
                     if archive_path else None
                 )
+                chat_kwargs = {}
+                if conversation_id:
+                    chat_kwargs["conversation_id"] = conversation_id
                 resp = self.worker_llm.chat(
                     messages=messages,
                     tools=WORKER_TOOLS,
                     label=f"{worker_id}_turn_{call_idx}",
                     stream_callback=self._stream_cb(worker_id),
                     archive_path=call_archive,
+                    **chat_kwargs,
                 )
                 self.tui.stream_end(tab=worker_id)
+                resp = _use_thinking_as_result(resp)
                 total_cost += resp["cost"]
                 total_duration += resp["duration_ms"]
+                if resp.get("conversation_id"):
+                    conversation_id = resp["conversation_id"]
                 call_idx += 1
 
                 finish = resp.get("finish_reason", "stop")
@@ -1719,17 +1892,21 @@ class Prover:
                         "content": "Your response was cut off. Continue with your final answer.",
                     })
                     self.tui.stream_start("forcing output...", tab=worker_id)
-                    answer_reserve = getattr(self.worker_llm, 'answer_reserve', 4096)
+                    answer_reserve = getattr(self.worker_llm, 'answer_reserve', None)
+                    phase2_kwargs = {}
+                    if conversation_id:
+                        phase2_kwargs["conversation_id"] = conversation_id
                     resp = self.worker_llm.chat(
                         messages=messages,
                         tools=None,
-                        max_tokens=answer_reserve,
+                        max_tokens=answer_reserve or 16_000,
                         label=f"{worker_id}_phase2",
-                        stream_callback=self._stream_cb(worker_id),
+                        stream_callback=self._stream_cb(worker_id, output_only=True),
                         archive_path=(
                             archive_path.parent / f"{archive_path.stem}_phase2.json"
                             if archive_path else None
                         ),
+                        **phase2_kwargs,
                     )
                     self.tui.stream_end(tab=worker_id)
                     total_cost += resp["cost"]
@@ -1755,6 +1932,11 @@ class Prover:
                       "duration_ms": total_duration, "raw": {}, "error": "interrupted"}
         except RuntimeError as e:
             self.tui.stream_end(tab=worker_id)
+            action = self._check_error_policy(e)
+            if action == "retry":
+                # Retry: re-enter the multi-turn loop from scratch
+                return self._run_worker_multi_turn(prompt, system_prompt, worker_id, archive_path)
+            self.tui.tab_log(worker_id, f"Error: {e}", color="red")
             result = {"result": f"Worker error: {e}", "cost": total_cost,
                       "duration_ms": total_duration, "raw": {}, "error": str(e)}
 
@@ -1824,31 +2006,102 @@ class Prover:
         """Run an independent verifier for a worker's output. Thread-safe."""
         prompt = prompts.format_verifier_prompt(task_desc, worker_output)
         system_prompt = prompts.verifier_system_prompt()
+        while True:
+            self.tui.stream_start("verifying...", tab=verifier_id)
+            try:
+                resp = self.verifier_llm.call(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    label=verifier_id,
+                    stream_callback=self._stream_cb(verifier_id),
+                    archive_path=archive_path,
+                )
+                self.tui.stream_end(tab=verifier_id)
+                resp = _use_thinking_as_result(resp)
 
-        self.tui.stream_start("verifying...", tab=verifier_id)
-        try:
-            resp = self.verifier_llm.call(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                label=verifier_id,
-                stream_callback=self._stream_cb(verifier_id),
-                archive_path=archive_path,
-            )
-            self.tui.stream_end(tab=verifier_id)
-            resp["error"] = ""
-        except Interrupted:
-            self.tui.stream_end(tab=verifier_id)
-            logger.info("[%s] interrupted", verifier_id)
-            resp = {"result": "(terminated by user)", "cost": 0.0,
-                    "duration_ms": 0, "raw": {}, "error": "interrupted"}
-        except QuotaExceeded as e:
-            self.tui.stream_end(tab=verifier_id)
-            resp = {"result": f"Verifier error: {e}", "cost": 0.0,
-                    "duration_ms": 0, "raw": {}, "error": "quota_exceeded"}
-        except RuntimeError as e:
-            self.tui.stream_end(tab=verifier_id)
-            resp = {"result": f"Verifier error: {e}", "cost": 0.0,
-                    "duration_ms": 0, "raw": {}, "error": str(e)}
+                # Phase 2: if truncated, force a verdict
+                if resp.get("finish_reason") in ("length", "max_tokens"):
+                    logger.info("[%s] truncated - Phase 2", verifier_id)
+                    self.tui.stream_start("forcing verdict...", tab=verifier_id)
+                    answer_reserve = getattr(self.verifier_llm, 'answer_reserve', None)
+                    phase2_max = answer_reserve or 4_000
+
+                    conv_id = resp.get("conversation_id")
+                    if conv_id and hasattr(self.verifier_llm, 'chat'):
+                        messages = [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt},
+                            {"role": "assistant", "content": resp["result"] or ""},
+                            {"role": "user", "content": (
+                                "Your verification was cut off. Based on your analysis, "
+                                "provide your final verdict now.\n\n"
+                                "Respond with ONLY one of:\n"
+                                "VERDICT: CORRECT\n"
+                                "VERDICT: CRITICALLY FLAWED - <brief reason>\n"
+                                "VERDICT: NEEDS MINOR FIXES - <brief reason>"
+                            )},
+                        ]
+                        resp2 = self.verifier_llm.chat(
+                            messages=messages,
+                            tools=None,
+                            max_tokens=phase2_max,
+                            label=f"{verifier_id}_phase2",
+                            stream_callback=self._stream_cb(verifier_id, output_only=True),
+                            archive_path=archive_path.parent / f"{archive_path.stem}_phase2.md" if archive_path else None,
+                            conversation_id=conv_id,
+                        )
+                    else:
+                        phase2_prompt = (
+                            f"{prompt}\n\n---\n\n"
+                            f"Your previous verification was cut off. Based on your analysis so far, "
+                            f"provide your final verdict now.\n\n"
+                            f"Previous output (last 2000 chars):\n"
+                            f"```\n{resp['result'][-2000:]}\n```\n\n"
+                            f"Respond with ONLY one of:\n"
+                            f"VERDICT: CORRECT\n"
+                            f"VERDICT: CRITICALLY FLAWED - <brief reason>\n"
+                            f"VERDICT: NEEDS MINOR FIXES - <brief reason>"
+                        )
+                        resp2 = self.verifier_llm.call(
+                            prompt=phase2_prompt,
+                            system_prompt=system_prompt,
+                            label=f"{verifier_id}_phase2",
+                            stream_callback=self._stream_cb(verifier_id, output_only=True),
+                            archive_path=archive_path.parent / f"{archive_path.stem}_phase2.md" if archive_path else None,
+                            max_tokens=phase2_max,
+                            no_thinking=True,
+                        )
+                    self.tui.stream_end(tab=verifier_id)
+                    resp2 = _use_thinking_as_result(resp2)
+                    resp = {
+                        "result": resp["result"] + "\n\n" + resp2["result"],
+                        "thinking": resp.get("thinking", ""),
+                        "cost": resp["cost"] + resp2["cost"],
+                        "duration_ms": resp["duration_ms"] + resp2["duration_ms"],
+                        "raw": resp2["raw"],
+                        "finish_reason": resp2.get("finish_reason", "stop"),
+                    }
+
+                resp["error"] = ""
+                break  # success
+            except Interrupted:
+                self.tui.stream_end(tab=verifier_id)
+                logger.info("[%s] interrupted", verifier_id)
+                resp = {"result": "(terminated by user)", "cost": 0.0,
+                        "duration_ms": 0, "raw": {}, "error": "interrupted"}
+                break
+            except QuotaExceeded as e:
+                self.tui.stream_end(tab=verifier_id)
+                resp = {"result": f"Verifier error: {e}", "cost": 0.0,
+                        "duration_ms": 0, "raw": {}, "error": "quota_exceeded"}
+                break
+            except RuntimeError as e:
+                self.tui.stream_end(tab=verifier_id)
+                if self._check_error_policy(e) == "retry":
+                    continue
+                resp = {"result": f"Verifier error: {e}", "cost": 0.0,
+                        "duration_ms": 0, "raw": {}, "error": str(e)}
+                break
         return resp
 
 
@@ -1902,8 +2155,80 @@ class Prover:
             "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
         }
 
+    @staticmethod
+    def _is_spending_limit_error(error: Exception) -> bool:
+        """Check if a RuntimeError indicates a Claude spending limit hit."""
+        msg = str(error).lower()
+        return ("spending" in msg or "spend limit" in msg
+                or "billing" in msg or "quota" in msg
+                or ("rate" in msg and "limit" in msg))
+
+    def _check_spending_limit(self, error: Exception) -> str:
+        """Handle rate-limit / spending-limit errors based on --on-budget-out.
+
+        Returns 'stop', 'retry' (after sleeping), or 'continue'.
+        """
+        if not self._is_spending_limit_error(error):
+            return "continue"
+
+        if self.on_budget_out == "exit":
+            self._spending_limit_hit = True
+            self.tui.log("Rate limit hit - exiting (--on-budget-out exit).", color="yellow")
+            return "stop"
+
+        if self.on_budget_out == "backoff":
+            delay = self._backoff_delay
+            self.tui.log(f"Rate limit hit - backing off {delay}s...", color="yellow")
+            time.sleep(delay)
+            # Escalate: 4 → 16 → 64, cap at 64
+            self._backoff_delay = min(delay * 4, 64)
+            return "retry"
+
+        # No --on-budget-out flag: default behavior (continue to next step)
+        return "continue"
+
+    @staticmethod
+    def _is_rate_limited_error(error: Exception) -> bool:
+        """Check if a RuntimeError indicates an HTTP 429 rate limit."""
+        return "429" in str(error)
+
+    def _check_rate_limited(self, error: Exception) -> str:
+        """Handle HTTP 429 errors based on --on-rate-limited.
+
+        Returns 'stop', 'retry' (after sleeping), or 'continue'.
+        """
+        if not self._is_rate_limited_error(error):
+            return "continue"
+
+        if self.on_rate_limited == "exit":
+            self._spending_limit_hit = True
+            self.tui.log("Rate limited (429) - exiting (--on-rate-limited exit).", color="yellow")
+            return "stop"
+
+        if self.on_rate_limited == "backoff":
+            delay = self._rate_limit_backoff
+            self.tui.log(f"Rate limited (429) - backing off {delay}s...", color="yellow")
+            time.sleep(delay)
+            self._rate_limit_backoff = min(delay * 4, 64)
+            return "retry"
+
+        # No --on-rate-limited flag: default behavior
+        return "continue"
+
+    def _check_error_policy(self, error: Exception) -> str:
+        """Check both --on-rate-limited and --on-budget-out policies.
+
+        Returns 'stop', 'retry', or 'continue'.
+        """
+        action = self._check_rate_limited(error)
+        if action != "continue":
+            return action
+        return self._check_spending_limit(error)
+
     def _track_output_tokens(self, resp: dict):
         """Add output tokens from an LLM response to the budget."""
+        self._backoff_delay = 4  # reset on success
+        self._rate_limit_backoff = 4  # reset on success
         tokens = self._extract_token_usage(resp)
         n = tokens["output_tokens"]
         if n > 0:
@@ -2200,12 +2525,14 @@ class Prover:
                         vtab.worker_output = result
                     if v_result:
                         self.tui.worker_output(vid, v_result)
-                        verdict = prompts.extract_verdict(v_result)
-                        if verdict:
-                            try:
-                                verdicts[int(tidx)] = verdict
-                            except ValueError:
-                                pass
+                    verdict = prompts.extract_verdict(v_result) if v_result else ""
+                    if not verdict and v_result_file.exists():
+                        verdict = "VERDICT: UNFINISHED - verification did not complete"
+                    if verdict:
+                        try:
+                            verdicts[int(tidx)] = verdict
+                        except ValueError:
+                            pass
                     self.tui.mark_worker_done(vid)
 
             self.tui.snapshot_worker_tabs(step_num)
@@ -2251,12 +2578,15 @@ class Prover:
         by ignoring calls within 100ms of the previous one.
         """
         now = time.time()
-        if now - self._last_interrupt_time < 0.1:
-            return
-        self._last_interrupt_time = now
-        self._interrupt_count += 1
+        with self._interrupt_lock:
+            if now - self._last_interrupt_time < 0.1:
+                return
+            self._last_interrupt_time = now
+            self._interrupt_count += 1
+            count = self._interrupt_count
+            workers_active = self._workers_active
 
-        if self._workers_active and self._interrupt_count == 1:
+        if workers_active and count == 1:
             # First Ctrl+C during workers: soft interrupt (force Phase 2 output)
             logger.info("Soft interrupt - forcing worker output")
             self.tui.log("Soft interrupt - forcing workers to wrap up", color="yellow")
@@ -2264,7 +2594,7 @@ class Prover:
             self.verifier_llm.soft_interrupt()
             return
 
-        if self._interrupt_count >= 3:
+        if count >= 3:
             self.shutting_down = True
 
         # Hard interrupt (second during workers, first during planner, or exit)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .core import LeanWorkDir, lean_has_errors, merge_lean_imports, run_lean_check
+from .core import LeanWorkDir, lean_has_errors, merge_lean_imports, run_lean_check, strip_code_fences
 
 mcp = FastMCP("lean_tools")
 
@@ -78,6 +78,7 @@ def _get_search_service():
 @mcp.tool()
 def lean_verify(code: str) -> str:
     """Verify Lean 4 code. Returns compiler output (errors/warnings or OK). Code from lean_store is automatically prepended."""
+    code = strip_code_fences(code)
     if not code.strip():
         raise ValueError("no code provided")
     work_dir = _get_work_dir()
@@ -85,7 +86,16 @@ def lean_verify(code: str) -> str:
     full_code = merge_lean_imports(_store, code) if _store else code
     path = work_dir.make_file("mcp_verify", full_code)
     success, feedback, _cmd_info = run_lean_check(path, project_dir)
-    result = "OK - no errors" if success else feedback
+    if success:
+        result = "OK - no errors"
+    else:
+        result = feedback
+        if not lean_has_errors(feedback) and "sorry" in feedback.lower():
+            result += (
+                "\n\nNote: code contains sorry — this means the proof has gaps. "
+                "lean_store will REJECT code with sorry. You must fill ALL sorry "
+                "holes with actual proof terms before storing."
+            )
     if _store:
         store_lines = len(_store.splitlines())
         result = f"({store_lines} lines from lean_store were automatically prepended)\n{result}"
@@ -96,6 +106,7 @@ def lean_verify(code: str) -> str:
 def lean_store(code: str) -> str:
     """Store a verified Lean 4 snippet (lemma, definition, etc.) into the persistent prefix. Stored code is automatically prepended to all subsequent lean_verify calls. The snippet must compile without errors or sorry. Imports are automatically deduplicated."""
     global _store
+    code = strip_code_fences(code)
     if not code.strip():
         raise ValueError("no code provided")
     work_dir = _get_work_dir()
@@ -120,7 +131,10 @@ async def lean_search(query: str) -> str:
         raise ValueError("no query provided")
     service = _get_search_service()
     rerank = 25 if _gpu_available() else 0
-    response = await service.search(query, limit=10, rerank_top=rerank)
+    response = await service.search(
+        query, limit=10, rerank_top=rerank,
+        packages=["Mathlib", "Batteries", "Init", "Lean", "Std"],
+    )
     results = response.results
     if not results:
         return "No results found"

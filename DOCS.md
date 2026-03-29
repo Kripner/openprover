@@ -149,17 +149,16 @@ MCP tool calling: When `mcp_config` is set, adds `--mcp-config <json> --strict-m
 
 Archiving: Every call saved to `archive/calls/call_NNN.json` with full prompt, system prompt, schema, response, cost, timing, and errors.
 
-**`CodexClient`** (OpenAI Codex CLI wrapper):
-- Calls `codex exec --json` in ephemeral mode
-- Sends the combined OpenProver system+user prompt on stdin
-- Passes reasoning effort through `-c model_reasoning_effort="<level>"`
-- Enables web search with the root `--search` flag when `web_search=True`
-- Converts `mcpServers` config into Codex `-c mcp_servers...` overrides so Lean tools work through MCP
-- Parses JSONL events (`agent_message`, `mcp_tool_call`, `web_search`, etc.) and keeps the last agent message as the final answer
-- Infers a 400k context window for explicit GPT-5-family model ids and otherwise falls back to a conservative 200k default
-- Estimates cost from `turn.completed` token usage for known published GPT-5/Codex model ids; unknown or implicit Codex CLI defaults remain at 0.0 cost
-- `stream_callback` receives the completed assistant message only after `item.completed`; Codex JSON mode does not expose partial text, so soft interrupt is advisory rather than truncating the current response
-- Archives the full event stream with token usage from `turn.completed`
+**`CodexClient`** (OpenAI Codex app-server wrapper):
+- Launches `codex app-server --listen stdio:// --session-source mcp`
+- Starts ephemeral threads/turns over the app-server RPC protocol instead of using `codex exec --json`
+- Passes reasoning effort through the `turn/start` `effort` field
+- Enables web search with thread config `{"web_search": "live"}` when `web_search=True`
+- Passes `mcp_config` through as thread config so Lean tools work through Codex MCP
+- Streams assistant text, reasoning text, and tool activity incrementally from app-server notifications into the TUI
+- Supports soft interrupt by sending `turn/interrupt`; interrupted turns return `finish_reason = "soft_interrupted"` with partial output preserved
+- Infers a 400k context window for GPT-5-family model ids and otherwise falls back to 200k
+- Archives the completed turn payload plus streamed output/thinking; cost currently remains `0.0` because app-server usage metadata is not surfaced through this integration
 
 **`HFClient`** (OpenAI-compatible HTTP, for vLLM):
 - Calls an OpenAI-compatible API at `--provider-url`

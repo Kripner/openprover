@@ -1,7 +1,10 @@
 """Streaming and spinner display for the TUI."""
 
+import re
 import sys
 import time
+
+_TOML_TAGS_RE = re.compile(r'</?(?:OPENPROVER_ACTION|TOML_OUTPUT)>\n?')
 
 from ._colors import DIM, GREEN, RESET, SPINNER
 from ._types import _LogEntry, _Tab
@@ -55,6 +58,7 @@ class StreamMixin:
         target.toml_close_tag = ""
         target.output_non_toml_seen = False
         target.output_toml_seen = False
+        target.show_toml = False
         target.streaming = True
         target.is_waiting = False
         target.done = False
@@ -70,7 +74,7 @@ class StreamMixin:
             else:
                 self._write(f'  {DIM}{SPINNER[0]} {label} {self._spinner_status(0, 0)}{RESET}')
 
-    def stream_text(self, text: str, kind: str = "text", tab: str = "planner"):
+    def stream_text(self, text: str, kind: str = "text", tab: str = "planner", show_toml: bool = False):
         self._check_keys()
         target = self._find_tab_or_none(tab)
         if target is None:
@@ -81,6 +85,8 @@ class StreamMixin:
         # Planner should never emit model chunks while just waiting for workers.
         if target.id == "planner" and target.is_waiting:
             return
+        if show_toml:
+            target.show_toml = True
         target.spinner_tokens += 1
         is_active = target is self._active_tab
         at_bottom = target.scroll_offset == 0
@@ -90,7 +96,7 @@ class StreamMixin:
         had_visible = self._has_visible_stream_content(target)
         had_visible_output = (
             target.output_non_toml_seen
-            or (target.output_toml_seen and self.trace_visible)
+            or (target.output_toml_seen and (self.trace_visible or target.show_toml))
         )
 
         output_segments: list[tuple[bool, str]] = []
@@ -121,7 +127,7 @@ class StreamMixin:
                     continue
                 if is_toml:
                     target.output_toml_seen = True
-                    if self.trace_visible:
+                    if self.trace_visible or show_toml:
                         output_shown = True
                 else:
                     target.output_non_toml_seen = True
@@ -163,6 +169,10 @@ class StreamMixin:
                     if is_toml:
                         if self.trace_visible:
                             self._write(f'{DIM}{seg}{RESET}')
+                        elif show_toml:
+                            clean = _TOML_TAGS_RE.sub('', seg)
+                            if clean:
+                                self._write(clean)
                     else:
                         self._write(seg)
 
@@ -200,8 +210,6 @@ class StreamMixin:
         if is_active and self._main_visible:
             if self.view == "whiteboard_split" or target.scroll_offset > 0:
                 self._redraw()
-            elif had_visible:
-                self._write('\n')
             else:
                 self._write('\r\033[2K')
         self._redraw_header()
@@ -305,6 +313,6 @@ class StreamMixin:
     def _has_visible_stream_content(self, tab: _Tab) -> bool:
         if tab.output_non_toml_seen:
             return True
-        if tab.output_toml_seen and self.trace_visible:
+        if tab.output_toml_seen and (self.trace_visible or tab.show_toml):
             return True
         return bool(tab.trace_buf and self.trace_visible)
