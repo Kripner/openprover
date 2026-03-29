@@ -382,12 +382,21 @@ def _is_tool_capable(provider: str, model: str) -> bool:
     return provider in {"claude", "codex"} or model in VLLM_MODELS
 
 
+def _default_reasoning_effort(provider: str, role: str) -> str | None:
+    """Default reasoning effort by backend and role."""
+    if provider == "local":
+        return None
+    if role == "verifier":
+        return "xhigh" if provider == "codex" else "max"
+    return "high"
+
+
 def _resolve_reasoning_effort(parser, *, provider: str,
                               reasoning_effort: str | None,
                               role: str) -> str | None:
     """Validate and normalize reasoning effort for a backend."""
     if reasoning_effort is None:
-        return None
+        return _default_reasoning_effort(provider, role)
     effort = reasoning_effort.strip().lower()
     if not effort:
         parser.error(f"{role} reasoning effort cannot be empty")
@@ -433,7 +442,7 @@ def _cmd_prove():
     parser.add_argument("--worker-model", default=None,
                         help="Override model for worker (defaults to --model)")
     parser.add_argument("--reasoning-effort", default=None,
-                        help="Reasoning effort for both planner and worker. Claude: low/medium/high/max. Codex: none/minimal/low/medium/high/xhigh.")
+                        help="Reasoning effort for both planner and worker. Defaults to high for Claude/Codex; local models ignore it. Claude: low/medium/high/max. Codex: none/minimal/low/medium/high/xhigh.")
     parser.add_argument("--planner-reasoning-effort", default=None,
                         help="Override reasoning effort for planner")
     parser.add_argument("--worker-reasoning-effort", default=None,
@@ -580,6 +589,10 @@ def _cmd_prove():
         reasoning_effort=(args.worker_reasoning_effort or args.reasoning_effort),
         role="worker",
     )
+    verifier_reasoning_effort = _default_reasoning_effort(
+        worker_provider,
+        "verifier",
+    )
 
     # Local HTTP-backed models have no web search capability - force isolation
     if planner_provider == "local" and not args.isolation:
@@ -647,6 +660,14 @@ def _cmd_prove():
             worker_model,
             archive_dir,
             worker_reasoning_effort,
+        )
+
+    def make_verifier_llm(archive_dir):
+        return _make_client(
+            worker_provider,
+            worker_model,
+            archive_dir,
+            verifier_reasoning_effort,
         )
 
     _p = _display_model(planner_provider, planner_model)
@@ -719,6 +740,7 @@ def _cmd_prove():
         proof_md_text=proof_md_text,
         resumed=resuming and not inspect_mode,
         make_worker_llm=make_worker_llm,
+        make_verifier_llm=make_verifier_llm,
         lean_items=args.lean_items,
         lean_worker_tools=args.lean_worker_tools,
         history_budget=args.history_budget,
@@ -741,6 +763,7 @@ def _cmd_prove():
     def _cleanup_llm_procs():
         prover.planner_llm.cleanup()
         prover.worker_llm.cleanup()
+        prover.verifier_llm.cleanup()
 
     atexit.register(_cleanup_llm_procs)
 
@@ -761,8 +784,16 @@ def _cmd_prove():
     try:
         prover.run()
     finally:
-        cost = prover.planner_llm.total_cost + prover.worker_llm.total_cost
-        calls = prover.planner_llm.call_count + prover.worker_llm.call_count
+        cost = (
+            prover.planner_llm.total_cost
+            + prover.worker_llm.total_cost
+            + prover.verifier_llm.total_cost
+        )
+        calls = (
+            prover.planner_llm.call_count
+            + prover.worker_llm.call_count
+            + prover.verifier_llm.call_count
+        )
         tui.cleanup()
         has_proof = ((prover.work_dir / "PROOF.md").exists()
                      or (prover.work_dir / "PROOF.lean").exists())

@@ -113,7 +113,7 @@ openprover --theorem examples/addition.md \
 | `--model` | auto | Model for both planner and worker (`sonnet` for Claude by default, Codex CLI default for Codex, `minimax-m2.5` for local) |
 | `--planner-model` | | Override model for planner |
 | `--worker-model` | | Override model for worker |
-| `--reasoning-effort` | | Reasoning effort for both planner and worker |
+| `--reasoning-effort` | `high` for Claude/Codex | Reasoning effort for both planner and worker |
 | `--planner-reasoning-effort` | | Override reasoning effort for planner |
 | `--worker-reasoning-effort` | | Override reasoning effort for worker |
 | `--max-time` | `4h` | Wall-clock time budget (e.g. `30m`, `2h`) |
@@ -142,6 +142,8 @@ Built-in model aliases:
 For Codex-specific model names such as `gpt-5.4` or `gpt-5.2`, use `--provider codex --model <name>` or the shorthand `--model codex:<name>`.
 
 Reasoning effort:
+- Default is `high` for Claude and Codex
+- Local OpenAI-compatible models default to no reasoning-effort flag
 - Claude supports `low`, `medium`, `high`, `max`
 - Codex supports `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
 - Local OpenAI-compatible models do not currently support `--reasoning-effort` in OpenProver

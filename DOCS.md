@@ -49,7 +49,7 @@ Subcommands:
 - `openprover inspect [run_dir]` - browse a historical run
 - `openprover fetch-lean-data` - download Lean Explore search data and models
 
-The LLM client is constructed via a factory pattern: `Prover` calls `make_llm(archive_dir)` after setting up the work directory, so the archive path is correct from the start. Separate planner and worker models are supported via `--planner-model` and `--worker-model`, backend providers can be selected independently via `--provider`, `--planner-provider`, and `--worker-provider` (for example `--provider codex --model gpt-5.4`), and reasoning effort can be set independently via `--reasoning-effort`, `--planner-reasoning-effort`, and `--worker-reasoning-effort`.
+The LLM client is constructed via a factory pattern: `Prover` calls `make_llm(archive_dir)` after setting up the work directory, so the archive path is correct from the start. Separate planner and worker models are supported via `--planner-model` and `--worker-model`, backend providers can be selected independently via `--provider`, `--planner-provider`, and `--worker-provider` (for example `--provider codex --model gpt-5.4`), and reasoning effort can be set independently via `--reasoning-effort`, `--planner-reasoning-effort`, and `--worker-reasoning-effort`. When omitted, reasoning effort defaults to `high` for Claude/Codex backends and remains unset for `local`.
 
 Run configuration is saved to `run_config.toml` in the work directory on fresh starts and restored on resume. CLI flags override saved values.
 

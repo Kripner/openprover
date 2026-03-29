@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from openprover.llm import QuotaExceeded
 from openprover.llm.codex import (
     CodexClient,
     _codex_mcp_overrides,
@@ -150,6 +151,64 @@ def test_collect_events_keeps_completed_output_after_soft_interrupt(tmp_path):
     assert result["finish_reason"] == "stop"
     assert result["cost"] == pytest.approx(0.0022925)
     assert client._soft_interrupted.is_set() is False
+
+
+def test_collect_events_raises_quota_exceeded_from_stderr(tmp_path):
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("Error: You've hit your limit for today")
+            self.returncode = 1
+
+        def wait(self):
+            return self.returncode
+
+    client = CodexClient("gpt-5.4", tmp_path)
+
+    with pytest.raises(QuotaExceeded, match="hit your limit"):
+        client._collect_events(
+            proc=_FakeProc(),
+            call_num=1,
+            label="worker_0",
+            prompt="prompt",
+            system_prompt="system",
+            json_schema=None,
+            archive_path=None,
+            start=time.time(),
+            stream_callback=None,
+            tool_callback=None,
+            tool_start_callback=None,
+        )
+
+
+def test_collect_events_raises_quota_exceeded_from_event_error(tmp_path):
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = io.StringIO(
+                '{"type":"error","message":"Too many requests"}\n'
+            )
+            self.stderr = io.StringIO("")
+            self.returncode = 0
+
+        def wait(self):
+            return self.returncode
+
+    client = CodexClient("gpt-5.4", tmp_path)
+
+    with pytest.raises(QuotaExceeded, match="Too many requests"):
+        client._collect_events(
+            proc=_FakeProc(),
+            call_num=1,
+            label="worker_0",
+            prompt="prompt",
+            system_prompt="system",
+            json_schema=None,
+            archive_path=None,
+            start=time.time(),
+            stream_callback=None,
+            tool_callback=None,
+            tool_start_callback=None,
+        )
 
 
 def test_extract_tool_result_text_reads_mcp_text_content():

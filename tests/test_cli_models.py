@@ -4,6 +4,7 @@ from argparse import Namespace
 import pytest
 
 from openprover.cli import (
+    _default_reasoning_effort,
     _display_model,
     _resolve_reasoning_effort,
     _resolve_provider_and_model,
@@ -96,6 +97,39 @@ def test_claude_reasoning_effort_accepts_high():
         reasoning_effort="high",
         role="planner",
     ) == "high"
+
+
+def test_claude_reasoning_effort_defaults_to_high():
+    assert _resolve_reasoning_effort(
+        _parser(),
+        provider="claude",
+        reasoning_effort=None,
+        role="planner",
+    ) == "high"
+
+
+def test_codex_reasoning_effort_defaults_to_high():
+    assert _resolve_reasoning_effort(
+        _parser(),
+        provider="codex",
+        reasoning_effort=None,
+        role="worker",
+    ) == "high"
+
+
+def test_local_reasoning_effort_defaults_to_none():
+    assert _resolve_reasoning_effort(
+        _parser(),
+        provider="local",
+        reasoning_effort=None,
+        role="worker",
+    ) is None
+
+
+def test_verifier_default_reasoning_effort_uses_strongest_available():
+    assert _default_reasoning_effort("claude", "verifier") == "max"
+    assert _default_reasoning_effort("codex", "verifier") == "xhigh"
+    assert _default_reasoning_effort("local", "verifier") is None
 
 
 def test_codex_reasoning_effort_accepts_xhigh():

@@ -12,7 +12,13 @@ import threading
 import time
 from pathlib import Path
 
-from ._base import Interrupted, archive, kill_process_tree
+from ._base import (
+    Interrupted,
+    QuotaExceeded,
+    archive,
+    is_quota_exceeded_error,
+    kill_process_tree,
+)
 
 logger = logging.getLogger("openprover.llm")
 
@@ -473,11 +479,15 @@ class CodexClient:
             )
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           None, err, elapsed_ms, archive_path)
+            if is_quota_exceeded_error(err):
+                raise QuotaExceeded(err[:1000])
             raise RuntimeError(err[:1000])
 
         if event_error:
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           None, event_error, elapsed_ms, archive_path)
+            if is_quota_exceeded_error(event_error):
+                raise QuotaExceeded(event_error[:1000])
             raise RuntimeError(event_error[:1000])
 
         raw = {

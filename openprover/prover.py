@@ -176,12 +176,14 @@ class Prover:
                  proof_md_text: str = "",
                  resumed: bool = False,
                  make_worker_llm=None,
+                 make_verifier_llm=None,
                  lean_items: bool = False,
                  lean_worker_tools: bool = False,
                  history_budget: int = 0):
         self.model = model_name
         self._make_llm = make_llm
         self._make_worker_llm = make_worker_llm or make_llm
+        self._make_verifier_llm = make_verifier_llm or self._make_worker_llm
         self.lean_items = lean_items
         self.lean_worker_tools = lean_worker_tools
         self._history_budget_override = history_budget
@@ -255,6 +257,7 @@ class Prover:
         # LLM clients (archive_dir unused - all calls provide explicit archive_path)
         self.planner_llm = self._make_llm(self.work_dir)
         self.worker_llm = self._make_worker_llm(self.work_dir)
+        self.verifier_llm = self._make_verifier_llm(self.work_dir)
         # Unified view for cost/call tracking
         self.llm = self.planner_llm
 
@@ -898,6 +901,7 @@ class Prover:
         self.step_num -= 1  # don't count interrupted step
         self.planner_llm.clear_interrupt()
         self.worker_llm.clear_interrupt()
+        self.verifier_llm.clear_interrupt()
 
         if self.autonomous:
             self.autonomous = False
@@ -1269,6 +1273,7 @@ class Prover:
         if any_interrupted:
             self.planner_llm.clear_interrupt()
             self.worker_llm.clear_interrupt()
+            self.verifier_llm.clear_interrupt()
             self.tui.update_step_status(
                 self._step_idx,
                 interrupted=True,
@@ -1465,6 +1470,7 @@ class Prover:
         except Interrupted:
             self.tui.stream_end(tab=wid)
             self.worker_llm.clear_interrupt()
+            self.verifier_llm.clear_interrupt()
             self.tui.update_step_status(
                 self._step_idx,
                 interrupted=True,
@@ -1821,7 +1827,7 @@ class Prover:
 
         self.tui.stream_start("verifying...", tab=verifier_id)
         try:
-            resp = self.worker_llm.call(
+            resp = self.verifier_llm.call(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 label=verifier_id,
@@ -2255,6 +2261,7 @@ class Prover:
             logger.info("Soft interrupt - forcing worker output")
             self.tui.log("Soft interrupt - forcing workers to wrap up", color="yellow")
             self.worker_llm.soft_interrupt()
+            self.verifier_llm.soft_interrupt()
             return
 
         if self._interrupt_count >= 3:
@@ -2263,4 +2270,5 @@ class Prover:
         # Hard interrupt (second during workers, first during planner, or exit)
         self.planner_llm.interrupt()
         self.worker_llm.interrupt()
+        self.verifier_llm.interrupt()
         self.tui.interrupt()  # in case we're in a confirmation prompt
