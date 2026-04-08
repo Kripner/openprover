@@ -150,7 +150,28 @@ class MistralClient:
                 "Authorization": f"Bearer {self._api_key}",
             },
         )
-        return urllib.request.urlopen(req, timeout=timeout)
+        # Retry transient upstream failures (5xx + connection resets) with
+        # exponential backoff. 4xx errors are surfaced immediately.
+        delays = [2, 5, 15, 30, 60]
+        for attempt, delay in enumerate([0] + delays):
+            if delay:
+                if self._interrupted.is_set():
+                    raise Interrupted()
+                logger.warning(
+                    "mistral request failed, retrying in %ds (attempt %d/%d)",
+                    delay, attempt, len(delays))
+                time.sleep(delay)
+            try:
+                return urllib.request.urlopen(req, timeout=timeout)
+            except urllib.error.HTTPError as e:
+                if 500 <= e.code < 600 and attempt < len(delays):
+                    continue
+                raise
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                if attempt < len(delays):
+                    logger.warning("mistral connection error: %s", e)
+                    continue
+                raise
 
     # ── call() ───────────────────────────────────────────────────────
 
