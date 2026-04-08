@@ -11,6 +11,14 @@ from pathlib import Path
 from openprover import __version__
 from .budget import Budget, parse_duration
 from .llm import LLMClient, HFClient, MistralClient
+from .model_caps import (
+    CLAUDE_MODELS,
+    HF_MODEL_MAP,
+    MISTRAL_MODEL_MAP,
+    TOOL_CAPABLE_MODELS,
+    VLLM_MODELS,
+    supports_web_search,
+)
 from .prover import Prover, slugify
 from .tui import TUI, HeadlessTUI
 
@@ -289,18 +297,6 @@ def _cmd_prove():
     (work_dir, theorem_text, lean_theorem_text, proof_md_text,
      mode, resuming, read_only) = _resolve_inputs(parser, args)
 
-    # Map short model names to backend-specific model IDs
-    HF_MODEL_MAP = {
-        "minimax-m2.5": "MiniMaxAI/MiniMax-M2.5",
-    }
-    MISTRAL_MODEL_MAP = {
-        "leanstral": "labs-leanstral-2603",
-    }
-    VLLM_MODELS = {"minimax-m2.5"}  # served via vLLM (standard OpenAI API)
-    MISTRAL_MODELS = {"leanstral"}  # Mistral Conversations API
-    CLAUDE_MODELS = {"sonnet", "opus"}
-    TOOL_CAPABLE_MODELS = VLLM_MODELS | CLAUDE_MODELS | MISTRAL_MODELS
-
     # ── On resume, load saved config and apply as defaults ──
     if resuming:
         saved = _load_run_config(work_dir)
@@ -397,9 +393,17 @@ def _cmd_prove():
                 f"got: {', '.join(non_claude)}"
             )
 
-    # Non-Claude models have no web search capability - force isolation
-    non_claude_models = {"minimax-m2.5", "leanstral"}
-    if planner_model in non_claude_models and not args.isolation:
+    # literature_search is executed by the worker backend, so web-search
+    # capability must be checked against the worker model rather than the
+    # planner model. Older runs may have saved --no-isolation with a local
+    # worker; correct those to isolation mode. For an explicit new
+    # --no-isolation request, fail fast with a clear error.
+    if not args.isolation and not supports_web_search(worker_model):
+        if _cli_flag_given("--no-isolation"):
+            parser.error(
+                "--no-isolation requires a web-search-capable worker model "
+                "(sonnet or opus)"
+            )
         args.isolation = True
 
     if args.headless:
@@ -432,13 +436,23 @@ def _cmd_prove():
 
     def _make_client(model_alias, archive_dir):
         if model_alias in MISTRAL_MODEL_MAP:
-            return MistralClient(MISTRAL_MODEL_MAP[model_alias], archive_dir,
-                                 answer_reserve=args.answer_reserve)
-        if model_alias in HF_MODEL_MAP:
-            return HFClient(HF_MODEL_MAP[model_alias], archive_dir,
-                            base_url=args.provider_url, answer_reserve=args.answer_reserve,
-                            vllm=model_alias in VLLM_MODELS)
-        return LLMClient(model_alias, archive_dir, effort=effective_effort)
+            client = MistralClient(
+                MISTRAL_MODEL_MAP[model_alias],
+                archive_dir,
+                answer_reserve=args.answer_reserve,
+            )
+        elif model_alias in HF_MODEL_MAP:
+            client = HFClient(
+                HF_MODEL_MAP[model_alias],
+                archive_dir,
+                base_url=args.provider_url,
+                answer_reserve=args.answer_reserve,
+                vllm=model_alias in VLLM_MODELS,
+            )
+        else:
+            client = LLMClient(model_alias, archive_dir, effort=effective_effort)
+        client.model_alias = model_alias
+        return client
 
     def make_planner_llm(archive_dir):
         return _make_client(planner_model, archive_dir)

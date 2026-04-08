@@ -86,7 +86,7 @@ When `lean_worker_tools` is enabled, sets up tool calling for workers:
 | Handler | What it does |
 |---------|-------------|
 | `_handle_spawn` | Run worker tasks in parallel via `ThreadPoolExecutor` (up to `--parallelism`). Each worker gets its task description with wikilinks resolved. Results pushed to output window. |
-| `_handle_literature_search` | Spawn a web-enabled worker (Claude CLI with `WebSearch` + `WebFetch` tools). Results fed back to planner. |
+| `_handle_literature_search` | Spawn a web-enabled worker (currently Claude CLI with `WebSearch` + `WebFetch` tools). Results fed back to planner. |
 | `_handle_read_items` | Fetch full content of requested repo items, push to output. |
 | `_handle_write_items` | Create/update/delete repo items. Items with `format="lean"` are auto-verified via `lake env lean`. |
 | `_handle_write_whiteboard` | Update the whiteboard without spawning workers. |
@@ -156,7 +156,7 @@ Archiving: Every call saved to `archive/calls/call_NNN.json` with full prompt, s
 - `chat()` method for multi-turn tool calling conversations
 - Same interface as `LLMClient` (web_search and json_schema ignored)
 - Cost always 0.0 (local model)
-- Automatically enforces `--isolation`
+- Automatically enforces `--isolation` because local/vLLM workers cannot execute planner-level web search
 
 **Key gotchas:**
 - `--json-schema` puts structured output in `raw["structured_output"]`, not `raw["result"]`

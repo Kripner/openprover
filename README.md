@@ -17,7 +17,7 @@ With `--lean-project`, workers get access to **lean_verify** (compile Lean 4 cod
 Modes:
 - **Interactive** (default): see each step's plan, accept or give feedback
 - **Autonomous** (`--autonomous`): runs hands-off until proof found or budget exhausted
-- **Isolation** (default) / **No-isolation** (`--no-isolation`): by default, workers have no web access. With `--no-isolation`, the planner can use `literature_search` to find relevant papers and results online
+- **Isolation** (default) / **No-isolation** (`--no-isolation`): by default, workers have no web access. With `--no-isolation`, the planner can use `literature_search` to find relevant papers and results online when the worker model supports web search (currently Claude workers)
 - **Formal verification** (`--lean-project`): proof attempts are verified via `lake env lean`, workers can verify code and search Lean libraries
 
 ## Requirements
@@ -102,7 +102,7 @@ openprover --theorem examples/addition.md \
 | `--conclude-after` | `0.99` | Fraction of budget that triggers conclusion phase (0.9-1.0) |
 | `--autonomous` | off | Run without human confirmation |
 | `-P, --parallelism` | `1` | Max parallel workers per step |
-| `--isolation` / `--no-isolation` | on | Isolation disables web access; use `--no-isolation` to enable `literature_search` |
+| `--isolation` / `--no-isolation` | on | Isolation disables web access; `--no-isolation` requires a web-search-capable worker model (`sonnet` or `opus`) |
 | `--give-up-after` | `0.5` | Fraction of budget before give_up is allowed |
 | `--lean-project` | | Path to Lean project with lakefile |
 | `--lean-theorem` | | Path to THEOREM.lean (requires `--lean-project`) |

@@ -14,6 +14,7 @@ from . import prompts
 from .budget import Budget
 from .lean import LeanTheorem, LeanWorkDir, run_lean_check, lean_has_errors, WORKER_TOOLS, execute_worker_tool
 from .llm import Interrupted, LLMClient
+from .model_caps import llm_supports_web_search
 from .tui import TUI
 from .tui._colors import YELLOW, GREEN, RESET as _RESET
 
@@ -1436,6 +1437,18 @@ class Prover:
             self._push_output("Literature search is not available in isolation mode.")
             self._save_step_meta(step_dir, status="ok", action="literature_search",
                                  resp=planner_resp, error="Isolation mode")
+            return "continue"
+        if not llm_supports_web_search(self.worker_llm):
+            msg = (
+                "Literature search is not available because the worker backend "
+                "does not support web search."
+            )
+            self.tui.log(msg, color="yellow")
+            self._push_output(msg)
+            self._save_step_meta(
+                step_dir, status="ok", action="literature_search",
+                resp=planner_resp, error="Worker backend has no web search support",
+            )
             return "continue"
 
         query = plan.get("search_query", "")
