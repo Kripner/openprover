@@ -328,8 +328,11 @@ def _run_all(
 # Config keys carried forward when resuming a previous benchmark.
 _RESUME_CARRY_KEYS = (
     "method", "split", "model", "planner_model", "worker_model",
-    "max_time", "max_tokens", "parallelism", "informal", "skip", "limit",
+    "max_time", "max_tokens", "parallelism", "problem_parallelism",
+    "informal", "skip", "limit", "repo_path",
 )
+# Keys that need to be coerced back to Path on load (config.json stores strings).
+_RESUME_PATH_KEYS = ("repo_path",)
 
 
 def _load_resume(parser, resume_dir: Path) -> tuple[dict, list[dict]]:
@@ -428,8 +431,10 @@ def main():
         for key in _RESUME_CARRY_KEYS:
             if key not in old_config:
                 continue
-            cli_val = getattr(args, key, None)
             old_val = old_config[key]
+            if key in _RESUME_PATH_KEYS and old_val is not None:
+                old_val = Path(old_val)
+            cli_val = getattr(args, key, None)
             cli_default = parser.get_default(key)
             if cli_val != cli_default and cli_val != old_val:
                 parser.error(
@@ -533,6 +538,7 @@ def main():
         "parallelism": args.parallelism,
         "problem_parallelism": args.problem_parallelism,
         "informal": args.informal,
+        "repo_path": str(args.repo_path) if args.repo_path else None,
         "total_problems": len(carried) + len(problems),
         "skip": args.skip,
         "limit": args.limit,
