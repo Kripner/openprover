@@ -208,7 +208,7 @@ def _run_baseline(
         max_tokens = None
     result = run_baseline(
         name=name,
-        theorem_lean=info["formal"],
+        theorem_lean=LEAN_PREAMBLE + info["formal"],
         theorem_informal=info["informal"],
         lean_project_dir=lean_project,
         model=args.model,
