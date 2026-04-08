@@ -20,11 +20,12 @@ from pathlib import Path
 from openprover.lean.core import (
     LeanTheorem, LeanWorkDir, lean_has_errors, run_lean_check,
 )
-from openprover.llm import MistralClient
+from openprover.llm import LLMClient, MistralClient
 
 logger = logging.getLogger("baseline")
 
 MISTRAL_MODEL_MAP = {"leanstral": "labs-leanstral-2603"}
+CLAUDE_MODELS = {"sonnet", "opus"}
 
 # Match ```lean ... ``` (or ```lean4 ... ```) markdown code fences.
 LEAN_FENCE_RE = re.compile(
@@ -243,8 +244,11 @@ def run_baseline(
         with transcript_path.open("a") as f:
             f.write(text)
 
-    mistral_model = MISTRAL_MODEL_MAP.get(model, model)
-    client = MistralClient(model=mistral_model, archive_dir=archive_dir)
+    if model in CLAUDE_MODELS:
+        client = LLMClient(model=model, archive_dir=archive_dir)
+    else:
+        mistral_model = MISTRAL_MODEL_MAP.get(model, model)
+        client = MistralClient(model=mistral_model, archive_dir=archive_dir)
     work_dir = LeanWorkDir(lean_project_dir)
 
     # Parse the input theorem so we can splice proof bodies into its
