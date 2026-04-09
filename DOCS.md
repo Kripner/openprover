@@ -7,7 +7,7 @@ OpenProver uses a **planner-worker** architecture. A single planner LLM coordina
 ```
 cli.py          Parse args, setup TUI, run prover, print cost
 prover.py       Planner loop, step dispatch, action handlers, Repo
-llm.py          LLMClient (Claude CLI), HFClient (OpenAI-compatible HTTP)
+llm.py          LLMClient (Claude CLI), CodexClient (Codex CLI), HFClient (OpenAI-compatible HTTP)
 prompts.py      All prompt templates, TOML parser, actions enum
 budget.py       Budget tracking (token or time limits)
 lean/
@@ -30,7 +30,7 @@ inspect.py      Read-only run browser
 **Workers** (spawned on demand, parallel):
 - Receive a task description from the planner
 - Can reference repo items via `[[wikilink]]` syntax (resolved before sending)
-- When `--lean-project` is set with a tool-capable worker model, workers have access to `lean_verify` and `lean_search` tools via MCP (Claude) or native tool calling (vLLM)
+- When `--lean-project` is set with a tool-capable worker model, workers have access to `lean_verify` and `lean_search` tools via MCP (Claude/Codex) or native tool calling (vLLM)
 - Report free-form results back to the planner
 
 **Repository** (`repo/` directory):
@@ -49,7 +49,7 @@ Subcommands:
 - `openprover inspect [run_dir]` - browse a historical run
 - `openprover fetch-lean-data` - download Lean Explore search data and models
 
-The LLM client is constructed via a factory pattern: `Prover` calls `make_llm(archive_dir)` after setting up the work directory, so the archive path is correct from the start. Separate planner and worker models are supported via `--planner-model` and `--worker-model`.
+The LLM client is constructed via a factory pattern: `Prover` calls `make_llm(archive_dir)` after setting up the work directory, so the archive path is correct from the start. Separate planner and worker models are supported via `--planner-model` and `--worker-model`, backend providers can be selected independently via `--provider`, `--planner-provider`, and `--worker-provider` (for example `--provider codex --model gpt-5.4`), and reasoning effort can be set independently via `--reasoning-effort`, `--planner-reasoning-effort`, and `--worker-reasoning-effort`.
 
 Run configuration is saved to `run_config.toml` in the work directory on fresh starts and restored on resume. CLI flags override saved values.
 
@@ -68,7 +68,7 @@ The `Prover` class owns the proving loop and all state.
 **Init:** Creates or resumes a run directory (`runs/<slug>-<timestamp>/`). Loads or initializes the whiteboard. Creates the `Repo` instance. Resume is detected by checking for existing `WHITEBOARD.md` + `THEOREM.md`; step count inferred from `step_NNN` directories.
 
 When `lean_worker_tools` is enabled, sets up tool calling for workers:
-- **Claude CLI workers**: Configures an MCP server (`lean/mcp_server.py`) with `lean_verify` and `lean_search` tools
+- **Claude/Codex CLI workers**: Configures an MCP server (`lean/mcp_server.py`) with `lean_verify` and `lean_search` tools
 - **vLLM workers**: Initializes LeanExplore search service in-process and uses native OpenAI tool calling
 
 **Step flow** (`run` -> `_do_step`):
@@ -86,7 +86,7 @@ When `lean_worker_tools` is enabled, sets up tool calling for workers:
 | Handler | What it does |
 |---------|-------------|
 | `_handle_spawn` | Run worker tasks in parallel via `ThreadPoolExecutor` (up to `--parallelism`). Each worker gets its task description with wikilinks resolved. Results pushed to output window. |
-| `_handle_literature_search` | Spawn a web-enabled worker (Claude CLI with `WebSearch` + `WebFetch` tools). Results fed back to planner. |
+| `_handle_literature_search` | Spawn a web-enabled worker (Claude or Codex CLI with web search enabled). Results fed back to planner. |
 | `_handle_read_items` | Fetch full content of requested repo items, push to output. |
 | `_handle_write_items` | Create/update/delete repo items. Items with `format="lean"` are auto-verified via `lake env lean`. |
 | `_handle_write_whiteboard` | Update the whiteboard without spawning workers. |
@@ -114,7 +114,7 @@ When `lean_worker_tools` is enabled, sets up tool calling for workers:
 
 For the vLLM path, tools are executed in a multi-turn loop: the LLM requests tool calls, `_execute_worker_tool()` dispatches to `_tool_lean_verify()` or `_tool_lean_search()`, results are appended to the conversation, and the LLM continues.
 
-For the Claude CLI path, tool execution is handled by the MCP server subprocess. Tool call events are detected from the stream and reported to the TUI via `add_worker_action()`.
+For the Claude/Codex CLI path, tool execution is handled by the MCP server subprocess. Tool call events are detected from the stream and reported to the TUI via `add_worker_action()`.
 
 **Other methods:**
 - `_write_discussion()`: Post-session analysis via LLM call
@@ -124,18 +124,18 @@ For the Claude CLI path, tool execution is handled by the MCP server subprocess.
 
 ### `llm.py`
 
-Two LLM client implementations with the same interface.
+Three LLM client implementations with the same interface.
 
 **`LLMClient`** (Claude CLI wrapper):
 
 Non-streaming:
 ```
-claude -p --model <model> --system-prompt <...> --output-format json --tools ""
+claude -p --model <model> --system-prompt <...> --effort <level> --output-format json --tools ""
 ```
 
 Streaming:
 ```
-claude -p --model <model> --system-prompt <...> --output-format stream-json --verbose --include-partial-messages --tools ""
+claude -p --model <model> --system-prompt <...> --effort <level> --output-format stream-json --verbose --include-partial-messages --tools ""
 ```
 Uses `Popen` + `readline()` (not the line iterator, which has read-ahead buffering that defeats real-time streaming). Parses NDJSON lines, dispatches `content_block_delta` text to the callback.
 
@@ -148,6 +148,18 @@ MCP tool calling: When `mcp_config` is set, adds `--mcp-config <json> --strict-m
 - Status is inferred from result text (e.g., `lean_verify` results starting with "OK" = success)
 
 Archiving: Every call saved to `archive/calls/call_NNN.json` with full prompt, system prompt, schema, response, cost, timing, and errors.
+
+**`CodexClient`** (OpenAI Codex CLI wrapper):
+- Calls `codex exec --json` in ephemeral mode
+- Sends the combined OpenProver system+user prompt on stdin
+- Passes reasoning effort through `-c model_reasoning_effort="<level>"`
+- Enables web search with the root `--search` flag when `web_search=True`
+- Converts `mcpServers` config into Codex `-c mcp_servers...` overrides so Lean tools work through MCP
+- Parses JSONL events (`agent_message`, `mcp_tool_call`, `web_search`, etc.) and keeps the last agent message as the final answer
+- Infers a 400k context window for explicit GPT-5-family model ids and otherwise falls back to a conservative 200k default
+- Estimates cost from `turn.completed` token usage for known published GPT-5/Codex model ids; unknown or implicit Codex CLI defaults remain at 0.0 cost
+- `stream_callback` receives the completed assistant message only after `item.completed`; Codex JSON mode does not expose partial text, so soft interrupt is advisory rather than truncating the current response
+- Archives the full event stream with token usage from `turn.completed`
 
 **`HFClient`** (OpenAI-compatible HTTP, for vLLM):
 - Calls an OpenAI-compatible API at `--provider-url`
