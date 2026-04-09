@@ -1,11 +1,16 @@
 import argparse
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
 from openprover.cli import (
+    _cmd_reverify,
+    _infer_legacy_saved_provider,
     _default_reasoning_effort,
     _display_model,
+    _load_run_config,
+    _migrate_compatible_run_config,
     _resolve_reasoning_effort,
     _resolve_provider_and_model,
     _restore_saved_provider_model_args,
@@ -229,3 +234,241 @@ def test_resume_without_override_restores_saved_reasoning_effort(monkeypatch: py
 
     assert args.planner_reasoning_effort == "high"
     assert args.worker_reasoning_effort == "xhigh"
+
+
+def test_v100_run_config_is_migrated_to_v101(tmp_path):
+    config = tmp_path / "run_config.toml"
+    config.write_text(
+        'version = "1.0.0"\n'
+        'planner_model = "opus"\n'
+        'worker_model = "opus"\n'
+        'budget_mode = "time"\n'
+        'budget_limit = 3600\n'
+        'conclude_after = 0.99\n'
+        'parallelism = 1\n'
+        'give_up_ratio = 0.5\n'
+        'isolation = false\n'
+        'autonomous = true\n'
+        'mode = "prove"\n'
+        'lean_project_dir = ""\n'
+        'lean_items = false\n'
+        'lean_worker_tools = false\n'
+        'provider_url = "http://localhost:8000"\n'
+        'answer_reserve = 4096\n'
+        'history_budget = 0\n'
+    )
+
+    saved = _load_run_config(tmp_path)
+    migrated = _migrate_compatible_run_config(_parser(), tmp_path, saved)
+
+    assert migrated["version"] == "1.0.1"
+    assert migrated["planner_provider"] == "claude"
+    assert migrated["worker_provider"] == "claude"
+    assert migrated["planner_model"] == "opus"
+    assert migrated["worker_model"] == "opus"
+    assert "give_up_ratio" not in migrated
+
+
+def test_v100_codex_run_config_with_explicit_model_is_migrated(tmp_path):
+    config = tmp_path / "run_config.toml"
+    config.write_text(
+        'version = "1.0.0"\n'
+        'planner_model = "gpt-5.4"\n'
+        'worker_model = "gpt-5.4"\n'
+        'budget_mode = "time"\n'
+        'budget_limit = 3600\n'
+        'conclude_after = 0.99\n'
+        'parallelism = 1\n'
+        'give_up_ratio = 0.5\n'
+        'isolation = true\n'
+        'autonomous = false\n'
+        'mode = "prove"\n'
+        'lean_project_dir = ""\n'
+        'lean_items = false\n'
+        'lean_worker_tools = false\n'
+        'provider_url = "http://localhost:8000"\n'
+        'answer_reserve = 4096\n'
+        'history_budget = 0\n'
+    )
+
+    saved = _load_run_config(tmp_path)
+    migrated = _migrate_compatible_run_config(_parser(), tmp_path, saved)
+
+    assert migrated["version"] == "1.0.1"
+    assert migrated["planner_provider"] == "codex"
+    assert migrated["worker_provider"] == "codex"
+    assert migrated["planner_model"] == "gpt-5.4"
+    assert migrated["worker_model"] == "gpt-5.4"
+
+
+def test_legacy_saved_provider_infers_codex_for_explicit_model():
+    assert _infer_legacy_saved_provider(None, "gpt-5.4") == "codex"
+
+
+def test_reverify_uses_migrated_codex_backend_from_v100_run(monkeypatch, tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_config.toml").write_text(
+        'version = "1.0.0"\n'
+        'planner_model = "gpt-5.4"\n'
+        'worker_model = "gpt-5.4"\n'
+        'budget_mode = "time"\n'
+        'budget_limit = 3600\n'
+        'conclude_after = 0.99\n'
+        'parallelism = 1\n'
+        'give_up_ratio = 0.5\n'
+        'isolation = true\n'
+        'autonomous = false\n'
+        'mode = "prove"\n'
+        'lean_project_dir = ""\n'
+        'lean_items = false\n'
+        'lean_worker_tools = false\n'
+        'provider_url = "http://localhost:8000"\n'
+        'answer_reserve = 4096\n'
+        'history_budget = 0\n'
+    )
+
+    captured = {}
+
+    class _DummyClient:
+        model = "gpt-5.4"
+
+        def cleanup(self):
+            pass
+
+    monkeypatch.setattr(
+        "openprover.cli.sys.argv",
+        ["openprover", "reverify", str(run_dir), "--no-resume"],
+    )
+    monkeypatch.setattr(
+        "openprover.cli._find_reverify_targets",
+        lambda *_args, **_kwargs: [{
+            "step_num": 1,
+            "worker_idx": 0,
+            "task_path": run_dir / "steps" / "step_001" / "workers" / "task_0.md",
+            "result_path": run_dir / "steps" / "step_001" / "workers" / "result_0.md",
+            "original_verifier_result": run_dir / "steps" / "step_001" / "workers" / "verifier_result_0.md",
+            "original_verifier_call": run_dir / "steps" / "step_001" / "workers" / "verifier_0_call.md",
+            "original_verdict": "VERDICT: CORRECT",
+        }],
+    )
+    monkeypatch.setattr(
+        "openprover.cli._make_client",
+        lambda provider, model, _archive_dir, reasoning_effort, **_kwargs: (
+            captured.update({
+                "provider": provider,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+            }) or _DummyClient()
+        ),
+    )
+    monkeypatch.setattr(
+        "openprover.cli._run_standalone_verifier",
+        lambda *_args, **_kwargs: {"result": "VERDICT: CORRECT"},
+    )
+    monkeypatch.setattr(
+        "openprover.cli._load_call",
+        lambda _path: None,
+        raising=False,
+    )
+
+    workers_dir = run_dir / "steps" / "step_001" / "workers"
+    workers_dir.mkdir(parents=True)
+    (workers_dir / "task_0.md").write_text("task")
+    (workers_dir / "result_0.md").write_text("result")
+    (workers_dir / "verifier_result_0.md").write_text("VERDICT: CORRECT\n")
+
+    _cmd_reverify()
+    capsys.readouterr()
+
+    assert captured["provider"] == "codex"
+    assert captured["model"] == "gpt-5.4"
+    assert captured["reasoning_effort"] == "xhigh"
+
+
+def test_reverify_restores_saved_provider_url_and_answer_reserve(monkeypatch, tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_config.toml").write_text(
+        'version = "1.0.1"\n'
+        'planner_model = "minimax-m2.5"\n'
+        'worker_model = "minimax-m2.5"\n'
+        'planner_provider = "local"\n'
+        'worker_provider = "local"\n'
+        'planner_reasoning_effort = ""\n'
+        'worker_reasoning_effort = ""\n'
+        'budget_mode = "time"\n'
+        'budget_limit = 3600\n'
+        'conclude_after = 0.99\n'
+        'parallelism = 1\n'
+        'isolation = true\n'
+        'autonomous = false\n'
+        'mode = "prove"\n'
+        'lean_project_dir = ""\n'
+        'lean_items = false\n'
+        'lean_worker_tools = false\n'
+        'provider_url = "http://localhost:9999"\n'
+        'answer_reserve = 8192\n'
+        'history_budget = 0\n'
+    )
+
+    captured = {}
+
+    class _DummyClient:
+        model = "MiniMaxAI/MiniMax-M2.5"
+
+        def cleanup(self):
+            pass
+
+    monkeypatch.setattr(
+        "openprover.cli.sys.argv",
+        ["openprover", "reverify", str(run_dir), "--no-resume"],
+    )
+    monkeypatch.setattr(
+        "openprover.cli._find_reverify_targets",
+        lambda *_args, **_kwargs: [{
+            "step_num": 1,
+            "worker_idx": 0,
+            "task_path": run_dir / "steps" / "step_001" / "workers" / "task_0.md",
+            "result_path": run_dir / "steps" / "step_001" / "workers" / "result_0.md",
+            "original_verifier_result": run_dir / "steps" / "step_001" / "workers" / "verifier_result_0.md",
+            "original_verifier_call": run_dir / "steps" / "step_001" / "workers" / "verifier_0_call.md",
+            "original_verdict": "VERDICT: CORRECT",
+        }],
+    )
+    monkeypatch.setattr(
+        "openprover.cli._make_client",
+        lambda provider, model, _archive_dir, reasoning_effort, **kwargs: (
+            captured.update({
+                "provider": provider,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+                "provider_url": kwargs["provider_url"],
+                "answer_reserve": kwargs["answer_reserve"],
+            }) or _DummyClient()
+        ),
+    )
+    monkeypatch.setattr(
+        "openprover.cli._run_standalone_verifier",
+        lambda *_args, **_kwargs: {"result": "VERDICT: CORRECT"},
+    )
+    monkeypatch.setattr(
+        "openprover.cli._load_call",
+        lambda _path: None,
+        raising=False,
+    )
+
+    workers_dir = run_dir / "steps" / "step_001" / "workers"
+    workers_dir.mkdir(parents=True)
+    (workers_dir / "task_0.md").write_text("task")
+    (workers_dir / "result_0.md").write_text("result")
+    (workers_dir / "verifier_result_0.md").write_text("VERDICT: CORRECT\n")
+
+    _cmd_reverify()
+    capsys.readouterr()
+
+    assert captured["provider"] == "local"
+    assert captured["model"] == "minimax-m2.5"
+    assert captured["reasoning_effort"] is None
+    assert captured["provider_url"] == "http://localhost:9999"
+    assert captured["answer_reserve"] == 8192

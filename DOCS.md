@@ -47,6 +47,7 @@ Entry point. Parses arguments, creates a `Prover` and `TUI`, installs signal han
 Subcommands:
 - `openprover <theorem>` - main proving loop
 - `openprover inspect [run_dir]` - browse a historical run
+- `openprover reverify [run_dir]` - rerun archived worker verification with a selected verifier backend
 - `openprover fetch-lean-data` - download Lean Explore search data and models
 
 The LLM client is constructed via a factory pattern: `Prover` calls `make_llm(archive_dir)` after setting up the work directory, so the archive path is correct from the start. Separate planner and worker models are supported via `--planner-model` and `--worker-model`, backend providers can be selected independently via `--provider`, `--planner-provider`, and `--worker-provider` (for example `--provider codex --model gpt-5.4`), and reasoning effort can be set independently via `--reasoning-effort`, `--planner-reasoning-effort`, and `--worker-reasoning-effort`. When omitted, reasoning effort defaults to `high` for Claude/Codex backends and remains unset for `local`.
@@ -91,7 +92,7 @@ When `lean_worker_tools` is enabled, sets up tool calling for workers:
 | `_handle_write_items` | Create/update/delete repo items. Items with `format="lean"` are auto-verified via `lake env lean`. |
 | `_handle_write_whiteboard` | Update the whiteboard without spawning workers. |
 | `_handle_read_theorem` | Return THEOREM.md + THEOREM.lean + PROOF.md content to the planner. |
-| `_handle_submit_proof` | Save proof to `PROOF.md`. If Lean theorem exists, also assembles and verifies Lean proof via `lake env lean`, writes `PROOF.lean` on success. |
+| `_handle_submit_proof` | Save proof to `PROOF.md`, plus `PROOF_MANIFEST.json` and `PROOF_DEPENDENCIES.md` derived from the proof's `[[slug]]` references. If Lean theorem exists, also assembles and verifies Lean proof via `lake env lean`, writes `PROOF.lean` on success. |
 | `_handle_give_up` | Terminate. Only allowed after the give-up threshold (default 50% of budget). |
 
 **`Repo` class** (also in `prover.py`):
@@ -287,6 +288,8 @@ runs/<slug>-<timestamp>/
   THEOREM.lean                 - formal Lean statement (if --lean-theorem)
   WHITEBOARD.md                - latest whiteboard state (enables resume)
   PROOF.md                     - written only if proof found
+  PROOF_MANIFEST.json          - machine-readable proof -> repo dependency graph
+  PROOF_DEPENDENCIES.md        - proof section -> repo dependency summary
   PROOF.lean                   - formal Lean proof (if lean mode)
   DISCUSSION.md                - post-session analysis
   run_config.toml              - saved run configuration (for resume)
@@ -295,14 +298,18 @@ runs/<slug>-<timestamp>/
   steps/
     step_001/
       planner.toml             - planner's TOML decision
+      meta.toml                - planner/worker/verifier cost + backend metadata
       workers/
         task_0.md              - worker task description
         result_0.md            - worker output
-        worker_0_call.json     - archived LLM call
+        worker_0_call.md       - archived worker call with provider/model/effort frontmatter
+        verifier_0_call.md     - archived verifier call with provider/model/effort frontmatter
+        verifier_result_0.md   - verifier writeup / verdict
     step_002/...
-  archive/
-    calls/
-      call_001.json            - full LLM call record
+  reverify/
+    <timestamp>/
+      summary.md               - verdict summary for a replayed verifier run
+      step_001/worker_0/...    - copied task/output plus fresh verifier call archive
 ```
 
 **Slug format:** First 40 chars of theorem, lowercased, non-alphanumeric replaced with hyphens. Example: `sqrt2-irrational-20260220-143706`.
@@ -311,7 +318,9 @@ runs/<slug>-<timestamp>/
 
 ## Verification
 
-**Informal verification** (all modes): Workers can be tasked with verification by the planner. A verifier worker sees only the proof text (not the reasoning that produced it) and must end its response with `VERDICT: CORRECT` or `VERDICT: INCORRECT`. The planner is instructed to verify proofs before submitting.
+**Informal verification** (all modes): Workers can be tasked with verification by the planner. A verifier worker sees only the proof text (not the reasoning that produced it) and must end its response with `VERDICT: CORRECT` or `VERDICT: INCORRECT`. The planner is instructed to verify proofs before submitting. Verifier call archives persist the provider, requested model, actual model, and reasoning effort for later audit.
+
+**Re-verification**: `openprover reverify` walks archived worker tasks/results, reruns the verifier with a selected backend/model/effort, and writes a bundle under `run_dir/reverify/<timestamp>/`. By default it resumes the latest matching reverify bundle if present and revisits previously `CORRECT` items only. If one of those items fails re-verification, `--repair-broken` (enabled by default) makes OpenProver try to repair that item and then re-verify the repaired text. Pass `--no-repair-broken` for audit-only mode, or `--no-resume` to force a fresh bundle.
 
 **Formal verification** (lean modes): When `--lean-project` is provided, the system supports automatic Lean 4 verification:
 
@@ -326,6 +335,8 @@ Generated Lean files are placed in `<lean-project>/OpenProver-<random_id>/` with
 ## Wikilinks
 
 Task descriptions can reference repository items via `[[slug]]` syntax. Before a worker receives its task, `repo.resolve_wikilinks()` finds all references, fetches the content, and appends it as a "Referenced Materials" section. This lets the planner share proven lemmas, observations, or literature findings with workers without duplicating content in every task.
+
+Submitted proofs can also use explicit `[[slug]]` references. On `submit_proof`, OpenProver records direct proof references, recursively expands transitive repo dependencies, and writes both a JSON manifest and a human-readable reverse index so later audits can see which proof sections depend on which repo items.
 
 ## Adding a new action
 

@@ -102,6 +102,7 @@ openprover --theorem examples/addition.md \
 |---------|-------------|
 | `openprover <theorem.md>` | Run the prover (main command) |
 | `openprover inspect [run_dir]` | Browse prompts and outputs from a run |
+| `openprover reverify [run_dir]` | Re-run archived worker verification with a newer model/effort |
 | `openprover fetch-lean-data` | Download Lean Explore search data and models |
 
 ### Options
@@ -145,9 +146,28 @@ For Codex-specific model names such as `gpt-5.4` or `gpt-5.2`, use `--provider c
 
 Reasoning effort:
 - Default is `high` for Claude and Codex
+- Verifier calls default to the strongest built-in setting: `max` for Claude, `xhigh` for Codex
 - Mistral and local OpenAI-compatible models default to no reasoning-effort flag
 - Claude supports `low`, `medium`, `high`, `max`
 - Codex supports `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
+
+Re-verification:
+
+```bash
+# Re-run archived verifier checks in the latest run
+# By default this resumes the latest matching reverify bundle if present,
+# and if a previously accepted item fails, it tries to repair that item.
+openprover reverify --provider codex --model gpt-5.4 --reasoning-effort xhigh
+
+# Reverify a specific step/worker pair
+openprover reverify runs/sqrt2-irrational-20260217-143012 --step 12 --worker 0
+
+# Quick audit mode: reverify previously accepted items without repair attempts
+openprover reverify runs/sqrt2-irrational-20260217-143012 --no-repair-broken
+
+# Start a fresh bundle instead of resuming the latest matching one
+openprover reverify runs/sqrt2-irrational-20260217-143012 --no-resume
+```
 - Mistral and local OpenAI-compatible models do not currently support `--reasoning-effort` in OpenProver
 
 Codex CLI notes:
@@ -206,14 +226,19 @@ runs/<slug>-<timestamp>/
   THEOREM.lean         - formal Lean statement (if provided)
   WHITEBOARD.md        - current whiteboard state
   PROOF.md             - final proof (if found)
+  PROOF_MANIFEST.json  - machine-readable proof -> repo dependency map
+  PROOF_DEPENDENCIES.md - human-readable proof dependency summary
   PROOF.lean           - formal Lean proof (if lean mode)
   DISCUSSION.md        - post-session analysis
   repo/                - repository items (lemmas, observations, etc.)
-  steps/step_NNN/      - per-step planner decisions and worker results
+  steps/step_NNN/      - per-step planner decisions, worker outputs, verifier outputs, and call archives
+  reverify/<stamp>/    - optional re-verification bundles and summaries
   archive/calls/       - raw LLM call logs with cost/timing
 ```
 
 All state lives on disk, so runs can be interrupted and resumed.
+Archived call frontmatter includes the provider, requested model, actual model, and reasoning effort used for that call.
+If the submitted proof contains explicit `[[slug]]` references, OpenProver also records section-level dependency data so later re-verification can tell which proof sections depend on which repo items.
 
 ## Example theorems
 

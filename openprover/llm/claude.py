@@ -23,13 +23,16 @@ logger = logging.getLogger("openprover.llm")
 class LLMClient:
     """Calls Claude via the CLI and archives all interactions."""
 
+    provider = "claude"
     context_length = 200_000  # Claude models
     supports_mcp_tools = True
 
     def __init__(self, model: str, archive_dir: Path,
                  max_output_tokens: int = 128_000,
-                 reasoning_effort: str | None = None):
+                 reasoning_effort: str | None = None,
+                 requested_model: str | None = None):
         self.model = model
+        self.requested_model = requested_model or model
         self.archive_dir = archive_dir
         self.call_count = 0
         self.total_cost = 0.0
@@ -537,4 +540,7 @@ class LLMClient:
                  *, thinking="", result_text=""):
         archive(self.model, self.archive_dir, call_num, label, prompt,
                 system_prompt, json_schema, response, error, elapsed_ms,
-                archive_path, thinking=thinking, result_text=result_text)
+                archive_path, thinking=thinking, result_text=result_text,
+                provider=self.provider,
+                requested_model=self.requested_model,
+                reasoning_effort=self.reasoning_effort or "")

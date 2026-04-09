@@ -98,11 +98,14 @@ def _normalize_tool_calls(acc):
 class MistralClient:
     """Calls the Mistral Conversations API and archives interactions."""
 
+    provider = "mistral"
     context_length = 256_000
     mistral = True  # Used by prover for tool-routing dispatch
 
-    def __init__(self, model: str, archive_dir: Path, answer_reserve: int = 4096):
+    def __init__(self, model: str, archive_dir: Path, answer_reserve: int = 4096,
+                 requested_model: str | None = None):
         self.model = model
+        self.requested_model = requested_model or model
         self.archive_dir = archive_dir
         self.call_count = 0
         self.total_cost = 0.0
@@ -546,4 +549,7 @@ class MistralClient:
                  *, thinking="", result_text=""):
         archive(self.model, self.archive_dir, call_num, label, prompt,
                 system_prompt, json_schema, response, error, elapsed_ms,
-                archive_path, thinking=thinking, result_text=result_text)
+                archive_path, thinking=thinking, result_text=result_text,
+                provider=self.provider,
+                requested_model=self.requested_model,
+                reasoning_effort="")

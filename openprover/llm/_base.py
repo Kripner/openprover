@@ -65,7 +65,8 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
 
 def archive(model, archive_dir, call_num, label, prompt, system_prompt,
             json_schema, response, error, elapsed_ms, archive_path=None,
-            *, thinking="", result_text=""):
+            *, thinking="", result_text="", provider="",
+            requested_model="", reasoning_effort=""):
     """Archive an LLM call to a readable markdown file + raw JSON sidecar."""
     if archive_path:
         path = archive_path
@@ -92,6 +93,12 @@ def archive(model, archive_dir, call_num, label, prompt, system_prompt,
         f"model: {model}",
         f"elapsed_ms: {elapsed_ms}",
     ]
+    if provider:
+        fm_lines.append(f"provider: {provider}")
+    if requested_model:
+        fm_lines.append(f"requested_model: {requested_model}")
+    if reasoning_effort:
+        fm_lines.append(f"reasoning_effort: {reasoning_effort}")
     if cost_usd:
         fm_lines.append(f"cost_usd: {cost_usd}")
     if input_tokens:

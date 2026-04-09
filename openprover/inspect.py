@@ -16,6 +16,7 @@ HEADER_ROWS = 3
 
 # Section separator pattern used in archive .md files
 _SECTION_RE = re.compile(r'^======== (.+?) ========$', re.MULTILINE)
+_NUMBERED_CALL_RE = re.compile(r"^(?P<prefix>[a-z]+)_(?P<idx>\d+)_call(?:_(?P<phase>phase2))?\.md$")
 
 
 def find_latest_run() -> Path:
@@ -53,6 +54,9 @@ def _load_call(path: Path) -> dict | None:
                 if ": " in line:
                     key, val = line.split(": ", 1)
                     key = key.strip()
+                    val = val.strip()
+                    if len(val) >= 2 and val[0] == val[-1] == '"':
+                        val = val[1:-1]
                     # Parse numeric values
                     if key in ("call_num", "elapsed_ms", "input_tokens",
                                "output_tokens", "cache_creation_tokens",
@@ -133,7 +137,28 @@ def _make_pages(data: dict, step: int | str, role: str, label: str) -> list[dict
     """Create prompt and output pages from an archive dict."""
     pages = []
     model = data.get("model", "")
-    meta_parts = [p for p in [model, _format_duration(data), _format_tokens(data), _format_cost(data)] if p]
+    requested_model = data.get("requested_model", "")
+    provider = data.get("provider", "")
+    reasoning_effort = data.get("reasoning_effort", "")
+    model_meta = model
+    if provider and requested_model and requested_model != model:
+        model_meta = f"{provider} {requested_model} -> {model}"
+    elif provider and requested_model:
+        model_meta = f"{provider} {requested_model}"
+    elif provider and model:
+        model_meta = f"{provider} {model}"
+    elif requested_model:
+        model_meta = requested_model
+
+    meta_parts = [
+        p for p in [
+            model_meta,
+            f"effort:{reasoning_effort}" if reasoning_effort else "",
+            _format_duration(data),
+            _format_tokens(data),
+            _format_cost(data),
+        ] if p
+    ]
     meta = " | ".join(meta_parts)
 
     sys_prompt = data.get("system_prompt", "")
@@ -232,6 +257,20 @@ def _load_lean_pages(step_dir: Path, step_num: int) -> list[dict]:
     return pages
 
 
+def _find_numbered_call_indices(workers_dir: Path, prefix: str) -> list[int]:
+    """Return sorted archive indices for files like prefix_N_call.md."""
+    indices = set()
+    for path in workers_dir.glob(f"{prefix}_*_call*.md"):
+        match = _NUMBERED_CALL_RE.match(path.name)
+        if not match or match.group("prefix") != prefix:
+            continue
+        try:
+            indices.add(int(match.group("idx")))
+        except ValueError:
+            continue
+    return sorted(indices)
+
+
 def load_pages(run_dir: Path) -> list[dict]:
     """Load all pages from a run directory."""
     pages = []
@@ -261,13 +300,30 @@ def load_pages(run_dir: Path) -> list[dict]:
 
         workers_dir = step_dir / "workers"
         if workers_dir.exists():
-            worker_idx = 0
-            while True:
+            for worker_idx in _find_numbered_call_indices(workers_dir, "worker"):
                 worker_data = _load_call(workers_dir / f"worker_{worker_idx}_call.md")
                 if not worker_data:
-                    break
+                    continue
                 pages.extend(_make_pages(worker_data, step_num, "worker", f"Worker {worker_idx}"))
-                worker_idx += 1
+
+            for verifier_idx in _find_numbered_call_indices(workers_dir, "verifier"):
+                verifier_data = _load_call(workers_dir / f"verifier_{verifier_idx}_call.md")
+                if not verifier_data:
+                    continue
+                pages.extend(_make_pages(
+                    verifier_data,
+                    step_num,
+                    "verifier",
+                    f"Verify {verifier_idx}",
+                ))
+                phase2_data = _load_call(workers_dir / f"verifier_{verifier_idx}_call_phase2.md")
+                if phase2_data:
+                    pages.extend(_make_pages(
+                        phase2_data,
+                        step_num,
+                        "verifier",
+                        f"Verify {verifier_idx} Phase 2",
+                    ))
 
             search_data = _load_call(workers_dir / "search_call.md")
             if search_data:

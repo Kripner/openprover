@@ -23,6 +23,15 @@ def test_codex_client_is_tool_capable(monkeypatch: pytest.MonkeyPatch, tmp_path)
     assert client.answer_reserve == 4096
 
 
+def test_app_server_command_matches_current_codex_cli():
+    assert CodexClient._app_server_cmd() == [
+        "codex",
+        "app-server",
+        "--listen",
+        "stdio://",
+    ]
+
+
 def test_call_uses_requested_reasoning_effort(monkeypatch: pytest.MonkeyPatch, tmp_path):
     requests: list[tuple[str, dict]] = []
     client = _make_client(monkeypatch, tmp_path, reasoning_effort="xhigh")

@@ -30,14 +30,17 @@ def _infer_context_length(model: str) -> int:
 class CodexClient:
     """Calls Codex via the app-server and archives interactions."""
 
+    provider = "codex"
     context_length = _FALLBACK_CONTEXT_LENGTH
     supports_mcp_tools = True
 
     def __init__(self, model: str, archive_dir: Path,
                  max_output_tokens: int = 128_000,
                  answer_reserve: int = 4096,
-                 reasoning_effort: str | None = None):
+                 reasoning_effort: str | None = None,
+                 requested_model: str | None = None):
         self.model = model
+        self.requested_model = requested_model or model
         self.archive_dir = archive_dir
         self.call_count = 0
         self.total_cost = 0.0
@@ -63,6 +66,16 @@ class CodexClient:
         self._stderr_thread: threading.Thread | None = None
 
         self._start_server()
+
+    @staticmethod
+    def _app_server_cmd() -> list[str]:
+        """Build the Codex app-server command for current CLI releases."""
+        return [
+            "codex",
+            "app-server",
+            "--listen",
+            "stdio://",
+        ]
 
     def interrupt(self):
         """Signal the active LLM call to stop."""
@@ -280,14 +293,7 @@ class CodexClient:
 
     def _start_server(self):
         self.cleanup()
-        cmd = [
-            "codex",
-            "app-server",
-            "--listen",
-            "stdio://",
-            "--session-source",
-            "mcp",
-        ]
+        cmd = self._app_server_cmd()
         self._proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -1162,4 +1168,7 @@ class CodexClient:
             archive_path,
             thinking=thinking,
             result_text=result_text,
+            provider=self.provider,
+            requested_model=self.requested_model,
+            reasoning_effort=self.reasoning_effort or "",
         )

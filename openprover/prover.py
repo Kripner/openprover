@@ -164,6 +164,251 @@ class Repo:
         return "\n\n".join(parts)
 
 
+def _extract_wikilink_slugs(text: str) -> list[str]:
+    """Return unique [[slug]] references in first-seen order."""
+    seen = set()
+    slugs = []
+    for slug in re.findall(r'\[\[([a-z0-9_/.-]+)\]\]', text):
+        if slug in seen:
+            continue
+        seen.add(slug)
+        slugs.append(slug)
+    return slugs
+
+
+def _ordered_union(items: list[str], extras: list[str]) -> list[str]:
+    """Return ordered union preserving first occurrence."""
+    out = []
+    seen = set()
+    for value in items + extras:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _split_markdown_sections(text: str) -> list[dict]:
+    """Split markdown into heading-based sections with line numbers."""
+    lines = text.splitlines()
+    if not lines:
+        return [{
+            "heading": "(entire proof)",
+            "level": 0,
+            "line_start": 1,
+            "text": "",
+        }]
+
+    sections = []
+    current = {
+        "heading": "(preamble)",
+        "level": 0,
+        "line_start": 1,
+        "lines": [],
+    }
+
+    for lineno, line in enumerate(lines, start=1):
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if match:
+            if current["lines"] or sections:
+                sections.append({
+                    "heading": current["heading"],
+                    "level": current["level"],
+                    "line_start": current["line_start"],
+                    "text": "\n".join(current["lines"]).strip(),
+                })
+            current = {
+                "heading": match.group(2).strip(),
+                "level": len(match.group(1)),
+                "line_start": lineno,
+                "lines": [line],
+            }
+            continue
+        current["lines"].append(line)
+
+    sections.append({
+        "heading": current["heading"],
+        "level": current["level"],
+        "line_start": current["line_start"],
+        "text": "\n".join(current["lines"]).strip(),
+    })
+    return sections
+
+
+def _build_repo_dependency_graph(repo: Repo, root_slugs: list[str]) -> dict[str, dict]:
+    """Build direct/all dependency info for a set of repo item slugs."""
+    graph: dict[str, dict] = {}
+    visiting: set[str] = set()
+
+    def visit(slug: str):
+        if slug in graph:
+            return
+        path = repo._resolve_path(slug)
+        content = path.read_text() if path else ""
+        direct_refs = _extract_wikilink_slugs(content)
+        graph[slug] = {
+            "slug": slug,
+            "exists": bool(path),
+            "path": str(path.relative_to(repo.dir)) if path else None,
+            "format": path.suffix.lstrip(".") if path else None,
+            "direct_refs": direct_refs,
+            "all_refs": [],
+        }
+        if slug in visiting:
+            return
+        visiting.add(slug)
+        for child in direct_refs:
+            if child not in visiting:
+                visit(child)
+        visiting.discard(slug)
+
+    for root_slug in root_slugs:
+        visit(root_slug)
+
+    memo: dict[str, list[str]] = {}
+
+    def all_refs(slug: str, active: set[str] | None = None) -> list[str]:
+        if slug in memo:
+            return memo[slug]
+        active = set(active or ())
+        if slug in active:
+            return []
+        active.add(slug)
+        refs = []
+        for child in graph.get(slug, {}).get("direct_refs", []):
+            if child == slug:
+                continue
+            refs = _ordered_union(refs, [child])
+            refs = _ordered_union(
+                refs,
+                [ref for ref in all_refs(child, active) if ref != slug],
+            )
+        active.remove(slug)
+        memo[slug] = refs
+        return refs
+
+    for slug in list(graph):
+        graph[slug]["all_refs"] = all_refs(slug)
+
+    return graph
+
+
+def _build_proof_manifest(repo: Repo, proof_slug: str, proof_text: str) -> dict:
+    """Build proof dependency manifest from the submitted proof text."""
+    sections = []
+    proof_sections = _split_markdown_sections(proof_text)
+    direct_refs = _extract_wikilink_slugs(proof_text)
+    graph = _build_repo_dependency_graph(repo, [proof_slug] + direct_refs)
+    all_refs = graph.get(proof_slug, {}).get("all_refs", [])
+    reverse_index: dict[str, dict[str, list[str]]] = {}
+
+    for section in proof_sections:
+        section_direct_refs = _extract_wikilink_slugs(section["text"])
+        section_all_refs = []
+        for slug in section_direct_refs:
+            section_all_refs = _ordered_union(
+                section_all_refs,
+                [slug] + graph.get(slug, {}).get("all_refs", []),
+            )
+        section_entry = {
+            "heading": section["heading"],
+            "level": section["level"],
+            "line_start": section["line_start"],
+            "direct_refs": section_direct_refs,
+            "all_refs": section_all_refs,
+        }
+        sections.append(section_entry)
+
+        for slug in section_direct_refs:
+            entry = reverse_index.setdefault(
+                slug, {"directly_used_by_sections": [], "used_by_sections": []}
+            )
+            entry["directly_used_by_sections"] = _ordered_union(
+                entry["directly_used_by_sections"], [section["heading"]]
+            )
+            entry["used_by_sections"] = _ordered_union(
+                entry["used_by_sections"], [section["heading"]]
+            )
+        for slug in section_all_refs:
+            entry = reverse_index.setdefault(
+                slug, {"directly_used_by_sections": [], "used_by_sections": []}
+            )
+            entry["used_by_sections"] = _ordered_union(
+                entry["used_by_sections"], [section["heading"]]
+            )
+
+    items = {
+        slug: {
+            "exists": item["exists"],
+            "path": item["path"],
+            "format": item["format"],
+            "direct_refs": item["direct_refs"],
+            "all_refs": item["all_refs"],
+        }
+        for slug, item in sorted(graph.items())
+    }
+
+    return {
+        "proof_slug": proof_slug,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "direct_refs": direct_refs,
+        "all_refs": all_refs,
+        "sections": sections,
+        "items": items,
+        "reverse_index": reverse_index,
+    }
+
+
+def _render_proof_dependencies_md(manifest: dict) -> str:
+    """Render a human-readable proof dependency summary."""
+    lines = [
+        "# Proof Dependencies",
+        "",
+        f"- Proof slug: `[[{manifest['proof_slug']}]]`",
+        f"- Generated at: `{manifest['generated_at']}`",
+        f"- Direct refs: {len(manifest['direct_refs'])}",
+        f"- All refs: {len(manifest['all_refs'])}",
+        "",
+    ]
+
+    if manifest["direct_refs"]:
+        lines.append("## Direct Refs")
+        lines.append("")
+        for slug in manifest["direct_refs"]:
+            lines.append(f"- `[[{slug}]]`")
+        lines.append("")
+
+    if manifest["sections"]:
+        lines.append("## Sections")
+        lines.append("")
+        for section in manifest["sections"]:
+            lines.append(
+                f"- line {section['line_start']}: {section['heading']} "
+                f"(direct: {len(section['direct_refs'])}, all: {len(section['all_refs'])})"
+            )
+            if section["direct_refs"]:
+                lines.append(
+                    f"  direct refs: {', '.join(f'[[{slug}]]' for slug in section['direct_refs'])}"
+                )
+            if section["all_refs"]:
+                lines.append(
+                    f"  all refs: {', '.join(f'[[{slug}]]' for slug in section['all_refs'])}"
+                )
+        lines.append("")
+
+    if manifest["reverse_index"]:
+        lines.append("## Item Impact")
+        lines.append("")
+        for slug in sorted(manifest["reverse_index"]):
+            entry = manifest["reverse_index"][slug]
+            used = ", ".join(entry["used_by_sections"]) or "(none)"
+            direct = ", ".join(entry["directly_used_by_sections"]) or "(none)"
+            lines.append(f"- `[[{slug}]]`: direct sections: {direct}; any-path sections: {used}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 class _TUILogHandler(logging.Handler):
     """Logging handler that forwards messages to the TUI logs tab."""
 
@@ -1039,7 +1284,15 @@ class Prover:
 
         self.proof_text = content
         (self.work_dir / "PROOF.md").write_text(content)
+        manifest = _build_proof_manifest(self.repo, proof_slug, content)
+        (self.work_dir / "PROOF_MANIFEST.json").write_text(
+            json.dumps(manifest, indent=2) + "\n"
+        )
+        (self.work_dir / "PROOF_DEPENDENCIES.md").write_text(
+            _render_proof_dependencies_md(manifest)
+        )
         self.tui.log(f"PROOF.md written from [[{proof_slug}]]", color="green")
+        self.tui.log("PROOF_MANIFEST.json and PROOF_DEPENDENCIES.md written", dim=True)
         logger.info("PROOF.md written from [[%s]]", proof_slug)
         feedback = f"PROOF.md written from [[{proof_slug}]]."
 
@@ -1477,6 +1730,10 @@ class Prover:
         self._save_step_meta(
             step_dir, status=status, action="spawn", resp=planner_resp,
             workers=[w for w in worker_resps if w],
+            verifiers=[
+                {**verifier_resps[i], "_meta_index": i}
+                for i in sorted(verifier_resps)
+            ],
         )
 
         # Store worker tab snapshots for history
@@ -2257,7 +2514,8 @@ class Prover:
                         resp: dict | None = None,
                         error: str = "",
                         feedback: str = "",
-                        workers: list[dict] | None = None):
+                        workers: list[dict] | None = None,
+                        verifiers: list[dict] | None = None):
         """Write meta.toml with structured metadata for the step."""
         lines = [
             f'timestamp = "{datetime.now(timezone.utc).isoformat()}"',
@@ -2276,6 +2534,8 @@ class Prover:
             tokens = self._extract_token_usage(resp)
             lines.append("")
             lines.append("[planner]")
+            lines.append(f'provider = "{getattr(self.planner_llm, "provider", "")}"')
+            lines.append(f'requested_model = "{getattr(self.planner_llm, "requested_model", self.planner_llm.model)}"')
             lines.append(f'cost_usd = {resp.get("cost", 0.0)}')
             lines.append(f'duration_ms = {resp.get("duration_ms", 0)}')
             lines.append(f'input_tokens = {tokens["input_tokens"]}')
@@ -2284,6 +2544,7 @@ class Prover:
             lines.append(f'cache_read_tokens = {tokens["cache_read_tokens"]}')
             raw = resp.get("raw") or {}
             lines.append(f'model = "{raw.get("model", self.planner_llm.model)}"')
+            lines.append(f'reasoning_effort = "{getattr(self.planner_llm, "reasoning_effort", "") or ""}"')
             lines.append(f'stop_reason = "{raw.get("stop_reason", "")}"')
 
         # Worker metadata
@@ -2292,6 +2553,8 @@ class Prover:
                 lines.append("")
                 lines.append(f"[[workers]]")
                 lines.append(f"index = {i}")
+                lines.append(f'provider = "{getattr(self.worker_llm, "provider", "")}"')
+                lines.append(f'requested_model = "{getattr(self.worker_llm, "requested_model", self.worker_llm.model)}"')
                 lines.append(f'cost_usd = {w.get("cost", 0.0)}')
                 lines.append(f'duration_ms = {w.get("duration_ms", 0)}')
                 tokens = self._extract_token_usage(w)
@@ -2299,8 +2562,32 @@ class Prover:
                 lines.append(f'output_tokens = {tokens["output_tokens"]}')
                 lines.append(f'cache_creation_tokens = {tokens["cache_creation_tokens"]}')
                 lines.append(f'cache_read_tokens = {tokens["cache_read_tokens"]}')
+                raw = w.get("raw") or {}
+                lines.append(f'model = "{raw.get("model", self.worker_llm.model)}"')
+                lines.append(f'reasoning_effort = "{getattr(self.worker_llm, "reasoning_effort", "") or ""}"')
                 if w.get("error"):
                     lines.append(f'error = "{w["error"]}"')
+
+        if verifiers:
+            for i, v in enumerate(verifiers):
+                idx = v.get("_meta_index", i)
+                lines.append("")
+                lines.append(f"[[verifiers]]")
+                lines.append(f"index = {idx}")
+                lines.append(f'provider = "{getattr(self.verifier_llm, "provider", "")}"')
+                lines.append(f'requested_model = "{getattr(self.verifier_llm, "requested_model", self.verifier_llm.model)}"')
+                lines.append(f'cost_usd = {v.get("cost", 0.0)}')
+                lines.append(f'duration_ms = {v.get("duration_ms", 0)}')
+                tokens = self._extract_token_usage(v)
+                lines.append(f'input_tokens = {tokens["input_tokens"]}')
+                lines.append(f'output_tokens = {tokens["output_tokens"]}')
+                lines.append(f'cache_creation_tokens = {tokens["cache_creation_tokens"]}')
+                lines.append(f'cache_read_tokens = {tokens["cache_read_tokens"]}')
+                raw = v.get("raw") or {}
+                lines.append(f'model = "{raw.get("model", self.verifier_llm.model)}"')
+                lines.append(f'reasoning_effort = "{getattr(self.verifier_llm, "reasoning_effort", "") or ""}"')
+                if v.get("error"):
+                    lines.append(f'error = "{v["error"]}"')
 
         (step_dir / "meta.toml").write_text("\n".join(lines) + "\n")
 
