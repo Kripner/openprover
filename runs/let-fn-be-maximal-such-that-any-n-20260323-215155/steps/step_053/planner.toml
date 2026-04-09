@@ -1,0 +1,38 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Identify the correct injective classical cups-caps state and prove injectivity"
+description = """
+Focus only on one preliminary subproblem in the non-averaging cups/caps direction.
+
+Context:
+- Verified lower bound: [[bounds/lower-bound-averaging]].
+- Averaging-based upgrades are closed barriers:
+  [[status/multi-k-averaging-barrier]],
+  [[status/multiplicity-aware-averaging-barrier]],
+  [[status/m-subset-total-count-bootstrapping-barrier]].
+- A naive cups/caps state failed:
+  if one defines $u_i,v_i$ as the longest cup and cap lengths both ending at $p_i$, the states need not be distinct.
+  Counterexample: in $x$-order
+  $$(1,0),(2,3),(3,1),(4,4),(5,5),$$
+  the resulting states are
+  $$(u_i,v_i)=(1,1),(2,2),(2,3),(3,3),(3,3).$$
+  See [[attempts/cups-caps-naive-state-noninjective]].
+
+Task:
+Recover the genuinely injective state/labelling used in the classical Erdős-Szekeres cups/caps proof, or a standard equivalent formulation, and prove the injectivity carefully.
+
+What I need:
+1. An explicit definition of the classical state attached to each point in $x$-order.
+2. A rigorous proof that these states are pairwise distinct.
+3. A brief note on how this state differs from the false endpoint state in [[attempts/cups-caps-naive-state-noninjective]].
+4. Repo-item-ready markdown if successful.
+
+Requirements:
+- Do not try to count convex subsets yet.
+- Do not branch into barriers, asymptotics, or alternative mechanisms.
+- Keep the output self-contained and narrowly focused on identifying the correct injective classical state.
+- No literature/web.
+
+"""

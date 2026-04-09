@@ -1,0 +1,5 @@
+The two concrete issues are fixed cleanly. The arbitrary-$n$ step is now literally valid for all $n\ge 1$ because $n=1$ is handled separately before setting $M=\lceil \log_2 n\rceil$, and for $n\ge 2$ one indeed has $M\ge 1$. The $k=1$ bookkeeping is also corrected by isolating $C_1(P_m)=2^m$, and the cup/cap induction no longer implicitly invokes $d_{r-1}$ at $r=2$ because the $r=2$ case is treated explicitly first.
+
+The rest is consistent with the accepted derivation: the indexing convention $|P_m|=2^m$ is preserved, the chain-pair injection is stated in the accepted form, the summed estimate for $g(P_m)$ is used correctly, and the endpoint-matching flaw in the discarded $\alpha=2$ claim is described accurately. I do not see any remaining proof-tightness issue introduced by these edits.
+
+VERDICT: CORRECT

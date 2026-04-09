@@ -1,0 +1,3 @@
+action = "read_items"
+summary = "Read the exact verified bounds and the current obstruction notes"
+read = ["bounds/lower-bound-averaging", "bounds/upper-bound-recursive-family", "status/endpoint-matched-recursive-family", "status/recursive-family-information-loss", "status/literature-total-convex-subsets"]

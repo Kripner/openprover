@@ -1,0 +1,45 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 86889,
+  "duration_api_ms": 86782,
+  "num_turns": 1,
+  "result": "<OPENPROVER_ACTION>\naction = \"read_items\"\nsummary = \"Read the upper bound construction and the two obstruction notes to decide the best next direction\"\nread = [\"bounds/upper-bound-recursive-family\", \"status/balanced-ternary-concrete-bridge-obstruction\", \"status/fixed-lag-separated-recursions-obstruction\"]\n</OPENPROVER_ACTION>",
+  "stop_reason": "end_turn",
+  "session_id": "19291879-231c-4bdb-978b-aa7924748955",
+  "total_cost_usd": 0.21714624999999999,
+  "usage": {
+    "input_tokens": 3,
+    "cache_creation_input_tokens": 15933,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 4702,
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 15933,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "",
+    "iterations": [],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-opus-4-6": {
+      "inputTokens": 3,
+      "outputTokens": 4702,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 15933,
+      "webSearchRequests": 0,
+      "costUSD": 0.21714624999999999,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000
+    }
+  },
+  "permission_denials": [],
+  "fast_mode_state": "off",
+  "uuid": "4bd66621-e907-424e-b08a-af2154764195"
+}

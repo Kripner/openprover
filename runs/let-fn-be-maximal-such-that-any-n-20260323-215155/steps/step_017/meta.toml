@@ -1,0 +1,23 @@
+timestamp = "2026-03-25T00:50:40.121220+00:00"
+step = 17
+status = "ok"
+action = "literature_search"
+
+[planner]
+cost_usd = 0.0
+duration_ms = 63893
+input_tokens = 24373
+output_tokens = 2762
+cache_creation_tokens = 0
+cache_read_tokens = 9344
+model = "gpt-5.4"
+stop_reason = "completed"
+
+[[workers]]
+index = 0
+cost_usd = 0.0
+duration_ms = 203927
+input_tokens = 111446
+output_tokens = 8290
+cache_creation_tokens = 0
+cache_read_tokens = 9344

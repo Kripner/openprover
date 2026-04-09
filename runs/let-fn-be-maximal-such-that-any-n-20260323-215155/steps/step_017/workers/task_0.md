@@ -1,0 +1,18 @@
+Query: minimum number of convex polygons subsets in n-point sets in general position asymptotic convex position subsets Erdos Szekeres
+
+Context: We currently have rigorously stored:
+- lower bound [[bounds/lower-bound-averaging]]:
+  $$\log_2 f(n)\ge (\tfrac14-o(1))(\log_2 n)^2;$$
+- upper bound [[bounds/upper-bound-recursive-family]]:
+  $$f(n)\le 2^{(\log_2 n)^2+O(\log n)}.$$
+
+Need literature specifically on the minimum possible number of subsets in convex position (equiv. convex polygons / convexly independent subsets, if that is the language used) among all $n$-point sets in general position in the plane.
+
+Please look for:
+1. any exact asymptotic estimate for $f(n)$;
+2. any improvement of either constant in the current bracket $[1/4,1]$ (base-2 normalization);
+3. any theorem about existence/nonexistence of
+   $$\lim \frac{\log f(n)}{(\log n)^2};$$
+4. relevant papers/authors if the problem appears under nearby terminology (convex polygons in point sets, convexly independent subsets, empty/non-empty convex polygons only if clearly relevant).
+
+Prioritize primary mathematical sources and extract the precise theorem statements or asymptotic bounds, not informal summaries.

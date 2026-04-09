@@ -1,0 +1,177 @@
+Summary: Averaging the full lower bound $g(Q)\ge f(m)$ over all $m$-subsets gives an exact weighted inequality, but using only the current repo bound $f(m)\ge 2^{(\\frac14-o(1))(\\log_2 m)^2}$ this mechanism still cannot certify a quadratic coefficient above $\\frac14$.
+
+Let
+\\[
+\\mathrm{conv}_t(P):=\\#\\{A\\subseteq P:\\ |A|=t,\\ A\\text{ is in convex position}\\},
+\\qquad
+g(P):=\\sum_{t\\ge 1}\\mathrm{conv}_t(P),
+\\]
+and
+\\[
+f(n):=\\min_{|P|=n} g(P).
+\\]
+
+Fix an $n$-point set $P$ in general position and an integer $m\\le n$.
+
+## Exact double count
+
+Count pairs
+\\[
+(A,Q)\\quad\\text{with }A\\subseteq Q\\subseteq P,\\ |Q|=m,\\ A\\text{ convex}.
+\\]
+
+If $Q$ is fixed, it contributes exactly $g(Q)$ pairs. If a convex $t$-subset $A\\subseteq P$ is fixed, then it is contained in exactly
+\\[
+\\binom{n-t}{m-t}
+\\]
+different $m$-subsets $Q$. Therefore
+\\[
+\\sum_{\\substack{Q\\subseteq P\\\\ |Q|=m}} g(Q)
+=
+\\sum_{t=1}^m \\binom{n-t}{m-t}\\,\\mathrm{conv}_t(P).
+\\tag{1}
+\\]
+
+Since every $m$-subset $Q$ satisfies $g(Q)\\ge f(m)$, (1) implies
+\\[
+\\sum_{t=1}^m \\binom{n-t}{m-t}\\,\\mathrm{conv}_t(P)
+\\ge
+\\binom{n}{m}f(m).
+\\tag{2}
+\\]
+
+Using
+\\[
+\\binom{n-t}{m-t}=\\binom{n}{m}\\frac{\\binom{m}{t}}{\\binom{n}{t}},
+\\]
+we can rewrite (2) as
+\\[
+\\sum_{t=1}^m \\frac{\\binom{m}{t}}{\\binom{n}{t}}\\,\\mathrm{conv}_t(P)
+\\ge
+f(m).
+\\tag{3}
+\\]
+
+This is the exact weighted inequality supplied by $m$-subset bootstrapping.
+
+## Best lower bound certifiable from the current input
+
+The only currently verified scalar input for $f(m)$ is
+\\[
+f(m)\\ge F(m):=2^{(\\frac14-o(1))(\\log_2 m)^2}
+\\]
+from [[bounds/lower-bound-averaging]].
+
+Set
+\\[
+y_t:=\\frac{\\mathrm{conv}_t(P)}{\\binom{n}{t}}\\in[0,1].
+\\]
+Then (3) gives
+\\[
+\\sum_{t=1}^m \\binom{m}{t}y_t\\ge F(m),
+\\qquad
+g(P)\\ge \\sum_{t=1}^m \\binom{n}{t}y_t.
+\\tag{4}
+\\]
+
+So any universal lower bound obtainable solely from this mechanism and the scalar input $f(m)\\ge F(m)$ is controlled by the optimization problem
+\\[
+B_{n,m}:=
+\\min \\sum_{t=1}^m \\binom{n}{t}y_t
+\\]
+subject to
+\\[
+0\\le y_t\\le 1,
+\\qquad
+\\sum_{t=1}^m \\binom{m}{t}y_t\\ge F(m).
+\\tag{5}
+\\]
+Indeed, (4) certifies only $g(P)\\ge B_{n,m}$.
+
+Now the value-per-cost ratio is decreasing:
+\\[
+\\frac{\\binom{m}{t+1}/\\binom{n}{t+1}}{\\binom{m}{t}/\\binom{n}{t}}
+=
+\\frac{m-t}{n-t}
+\\le 1.
+\\]
+Hence the minimizing solution of (5) fills the smallest sizes first. If $r$ is the least index such that
+\\[
+\\sum_{t=1}^r \\binom{m}{t}\\ge F(m),
+\\tag{6}
+\\]
+then
+\\[
+B_{n,m}\\le \\sum_{t=1}^r \\binom{n}{t}.
+\\tag{7}
+\\]
+
+## Asymptotic barrier
+
+Let
+\\[
+L:=\\log_2 n,
+\\qquad
+M:=\\log_2 m.
+\\]
+Fix $\\varepsilon>0$ and set
+\\[
+s:=\\left\\lceil \\left(\\frac14+\\varepsilon\\right)M\\right\\rceil.
+\\]
+Then
+\\[
+\\binom{m}{s}\\ge \\left(\\frac{m}{s}\\right)^s,
+\\]
+so
+\\[
+\\log_2 \\binom{m}{s}
+\\ge
+s(M-\\log_2 s)
+=
+\\left(\\frac14+\\varepsilon\\right)M^2-O(M\\log M).
+\\]
+Since
+\\[
+F(m)=2^{(\\frac14-o(1))M^2},
+\\]
+we have $F(m)\\le \\binom{m}{s}$ for all sufficiently large $m$, hence by (6) we get $r\\le s$.
+
+Therefore
+\\[
+B_{n,m}\\le \\sum_{t=1}^r \\binom{n}{t}
+\\le r\,n^r,
+\\]
+and so
+\\[
+\\log_2 B_{n,m}
+\\le rL+o(L^2)
+\\le
+\\left(\\frac14+\\varepsilon\\right)ML+o(L^2)
+\\le
+\\left(\\frac14+\\varepsilon\\right)L^2+o(L^2).
+\\]
+Because $\\varepsilon>0$ is arbitrary,
+\\[
+\\log_2 B_{n,m}
+\\le
+\\left(\\frac14+o(1)\\right)(\\log_2 n)^2.
+\\tag{8}
+\\]
+
+Thus the strongest lower bound on $g(P)$ that can be certified from the exact identity (3) together with the current input $f(m)\ge F(m)$ still has quadratic coefficient at most $\\frac14$.
+
+## Conclusion
+
+The $m$-subset total-count identity
+\\[
+\\sum_{|Q|=m} g(Q)
+=
+\\sum_{t=1}^m \\binom{n-t}{m-t}\\,\\mathrm{conv}_t(P)
+\\]
+is exact, but feeding into it only the currently verified lower bound
+\\[
+f(m)\\ge 2^{(\\frac14-o(1))(\\log_2 m)^2}
+\\]
+does not improve the $(\\log n)^2$ coefficient.
+
+So bootstrapping through $m$-subsets is another closed averaging barrier: with current inputs it cannot certify any lower bound for $f(n)$ whose quadratic constant exceeds $\\frac14$.

@@ -1,0 +1,3 @@
+action = "read_items"
+summary = "Read the upper bound construction and the two obstruction notes to decide the best next direction"
+read = ["bounds/upper-bound-recursive-family", "status/balanced-ternary-concrete-bridge-obstruction", "status/fixed-lag-separated-recursions-obstruction"]

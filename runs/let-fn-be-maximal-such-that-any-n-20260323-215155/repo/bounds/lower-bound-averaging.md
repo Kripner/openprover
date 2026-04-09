@@ -1,0 +1,143 @@
+Summary: Verified Erdős-Szekeres averaging proof that $f(n)\ge 2^{(\frac14-o(1))(\log_2 n)^2}$.
+
+Let
+\[
+g(P):=\#\{A\subseteq P: A\text{ is in convex position}\},
+\qquad
+\mathrm{conv}_k(P):=\#\{A\subseteq P: |A|=k,\ A\text{ is in convex position}\}.
+\]
+Then
+\[
+f(n)=\min_{|P|=n} g(P).
+\]
+
+We prove a clean lower bound using only the Erdős-Szekeres theorem and Suk's asymptotic bound on the Erdős-Szekeres numbers.
+
+## Proposition
+Fix $k\ge 3$, and let $m:=ES(k)$. If $P$ is an $n$-point set in general position with $n\ge m$, then
+\[
+\mathrm{conv}_k(P)\ge \frac{\binom{n}{k}}{\binom{m}{k}}.
+\]
+
+### Proof
+Consider the set
+\[
+\mathcal X:=\{(A,Q): A\subseteq Q\subseteq P,\ |A|=k,\ |Q|=m,\ A\text{ is in convex position}\}.
+\]
+
+We count $\mathcal X$ in two ways.
+
+First, fix an $m$-subset $Q\subseteq P$. By the definition of $m=ES(k)$, every such $Q$ contains at least one $k$-subset in convex position. Hence each $Q$ contributes at least one pair $(A,Q)$, so
+\[
+|\mathcal X|\ge \binom{n}{m}.
+\]
+
+Second, fix a convex $k$-subset $A\subseteq P$. The number of $m$-subsets $Q\subseteq P$ containing $A$ is exactly
+\[
+\binom{n-k}{m-k}.
+\]
+Therefore
+\[
+|\mathcal X|=\mathrm{conv}_k(P)\binom{n-k}{m-k}.
+\]
+
+Comparing the two counts gives
+\[
+\mathrm{conv}_k(P)\binom{n-k}{m-k}\ge \binom{n}{m},
+\]
+hence
+\[
+\mathrm{conv}_k(P)\ge \frac{\binom{n}{m}}{\binom{n-k}{m-k}}
+= \frac{\binom{n}{k}}{\binom{m}{k}}.
+\]
+The last identity is
+\[
+\binom{n}{m}\binom{m}{k}=\binom{n}{k}\binom{n-k}{m-k}.
+\]
+This proves the proposition. ∎
+
+As a consequence, for every $k$ with $ES(k)\le n$ and every $n$-point set $P$,
+\[
+g(P)\ge \mathrm{conv}_k(P)\ge \frac{\binom{n}{k}}{\binom{ES(k)}{k}},
+\]
+so
+\[
+f(n)\ge \frac{\binom{n}{k}}{\binom{ES(k)}{k}}.
+\]
+
+## Asymptotic optimization
+Use Suk's bound in the form
+\[
+ES(k)=2^{k+\varepsilon_k k},\qquad \varepsilon_k\to 0.
+\]
+
+Let
+\[
+L:=\log_2 n,\qquad k:=\Big\lfloor \frac{L}{2}\Big\rfloor.
+\]
+Then $k=(\tfrac12+o(1))L$, so
+\[
+\log_2 ES(k)=k+\varepsilon_k k=(\tfrac12+o(1))L<L
+\]
+for all sufficiently large $n$. Thus $ES(k)\le n$, and the previous bound applies.
+
+Now
+\[
+\frac{\binom{n}{k}}{\binom{ES(k)}{k}}
+=\prod_{i=0}^{k-1}\frac{n-i}{ES(k)-i}
+\ge \left(\frac{n-k+1}{ES(k)}\right)^k.
+\]
+Taking $\log_2$,
+\[
+\log_2 f(n)\ge k\bigl(\log_2(n-k+1)-\log_2 ES(k)\bigr).
+\]
+
+Since $k=O(\log n)=o(n)$, we have $\log_2(n-k+1)=L+o(1)$. Also $\log_2 ES(k)=k+\varepsilon_k k$. Therefore
+\[
+\log_2 f(n)\ge k\bigl(L-k-\varepsilon_k k+o(1)\bigr).
+\]
+Now
+\[
+kL-k^2=\frac14L^2+O(L),\qquad
+\varepsilon_k k^2=o(L^2),\qquad
+k\cdot o(1)=o(L),
+\]
+so
+\[
+\log_2 f(n)\ge \frac14L^2-o(L^2).
+\]
+
+Hence
+\[
+f(n)\ge 2^{(\frac14-o(1))(\log_2 n)^2}.
+\]
+
+This is asymptotically optimal for this argument: if $k=\alpha\log_2 n$, then the main term is
+\[
+(\alpha-\alpha^2)(\log_2 n)^2,
+\]
+maximized at $\alpha=\tfrac12$.
+
+## Final forms
+Using base-$2$ logarithms,
+\[
+f(n)\ge 2^{(\frac14-o(1))(\log_2 n)^2}.
+\]
+
+Using natural logarithms,
+\[
+f(n)\ge \exp\!\left(\left(\frac{1}{4\ln 2}-o(1)\right)(\ln n)^2\right).
+\]
+
+Indeed,
+\[
+2^{(\frac14-o(1))(\log_2 n)^2}
+=\exp\!\left((\tfrac14-o(1))\ln 2\cdot \frac{(\ln n)^2}{(\ln 2)^2}\right)
+=\exp\!\left(\left(\frac{1}{4\ln 2}-o(1)\right)(\ln n)^2\right).
+\]
+
+So the Erdős-Szekeres input alone yields the lower bound
+\[
+f(n)\ge 2^{(\frac14-o(1))(\log_2 n)^2}
+=\exp\!\left(\left(\frac{1}{4\ln 2}-o(1)\right)(\ln n)^2\right).
+\]

@@ -1,0 +1,11 @@
+action = "literature_search"
+summary = "Search for results on counting convex subsets of point sets"
+search_query = "minimum number of convex subsets point set general position Erdos Szekeres log squared"
+search_context = """
+I'm studying the function f(n) = minimum over all n-point sets in general position in the plane of the number of subsets in convex position. The question is whether the limit of log f(n) / (log n)^2 exists and equals some constant c.
+
+The upper bound direction uses Erdős-Szekeres extremal constructions (cups-caps or convex position lower bounds). The lower bound needs to show every n-point set has at least 2^{c(log n)^2} convex subsets.
+
+I'm looking for papers that study the number of convex subsets of a planar point set, especially results giving the correct order of magnitude of log f(n). Key related topics: Erdős-Szekeres theorem, cups and caps, counting convex polygons in point sets.
+
+"""

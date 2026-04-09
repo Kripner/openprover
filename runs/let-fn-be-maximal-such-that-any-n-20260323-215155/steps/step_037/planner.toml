@@ -1,0 +1,31 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Analyze the simplest non-binary recursive template: balanced ternary separated recursion"
+description = """
+Use [[bounds/upper-bound-recursive-family]], [[status/endpoint-matched-recursive-family]], [[attempts/alternative-construction-fibonacci-split]], and [[status/fixed-lag-separated-recursions-obstruction]].
+
+Work on exactly one task: define and analyze one concrete non-binary recursive family, namely a balanced ternary separated recursion, to decide whether changing arity (rather than lag) has any chance to lower the $(\log n)^2$ coefficient.
+
+Deliverable:
+1. Define a precise family $T_m$.
+   - Natural target: three child copies of $T_{m-1}$ in a standard left-middle-right separated position.
+   - If that geometry needs a cleaner formulation to make exact counting work, give the clean formulation explicitly.
+2. Derive the first exact structural decomposition or exact recurrences for spanning convex subsets in this family.
+   - Be explicit about what replaces the binary left-cup/right-cap convolution.
+   - Distinguish exact identities from inequalities.
+3. Extract one explicit top-scale obstruction term if possible.
+   - Goal: determine whether this ternary family already forces coefficient $\ge 1$ (or worse), or whether it yields a genuinely different mechanism worth pursuing.
+4. Output repo-ready markdown with a `Summary:` line.
+   - If the family is clearly obstructed, suitable slug: `status/ternary-separated-recursion-obstruction`.
+   - If it yields a genuinely new but still incomplete recurrence, suitable slug: `attempts/alternative-construction-balanced-ternary-split`.
+
+Requirements:
+- One family only: balanced ternary separated recursion.
+- Do not revisit binary fixed-lag variants or endpoint bookkeeping inside the old binary family.
+- Do not use literature or Lean.
+- If the symbolic analysis stalls, isolate the exact obstruction point cleanly instead of overstating.
+- The note should make clear why ternary recursion is the next fork after the binary fixed-lag obstruction.
+
+"""

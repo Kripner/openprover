@@ -1,0 +1,45 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 3042,
+  "duration_api_ms": 2963,
+  "num_turns": 1,
+  "result": "<OPENPROVER_ACTION>\naction = \"read_theorem\"\nsummary = \"Read the full theorem statement\"\n</OPENPROVER_ACTION>",
+  "stop_reason": "end_turn",
+  "session_id": "9f3c380f-9a44-4b9f-bfff-440e59fd7607",
+  "total_cost_usd": 0.01695,
+  "usage": {
+    "input_tokens": 2825,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 113,
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "",
+    "iterations": [],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-opus-4-6": {
+      "inputTokens": 2825,
+      "outputTokens": 113,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.01695,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000
+    }
+  },
+  "permission_denials": [],
+  "fast_mode_state": "off",
+  "uuid": "61f0bc22-4b82-44bf-aecc-5acc8d41ce8f"
+}

@@ -1,0 +1,41 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Test multiplicity-aware averaging as the next lower-bound mechanism"
+description = """
+Focus only on the lower-bound side.
+
+Context:
+- [[bounds/lower-bound-averaging]] proves, for every $n$-point set $P$ and every $k$ with $ES(k)\le n$,
+  $$
+  \mathrm{conv}_k(P)\ge \frac{\binom{n}{k}}{\binom{ES(k)}{k}}.
+  $$
+  That argument double-counts pairs $(A,Q)$ with $|A|=k$, $|Q|=ES(k)$, and uses only the fact that each such $Q$ contains at least one convex $k$-subset.
+- [[status/multi-k-averaging-barrier]] now shows that even summing these verified per-$k$ bounds over all admissible $k$ still gives only quadratic constant $\frac14$.
+
+Task:
+Investigate the next natural strengthening of the averaging route: keep one size $k$, allow a larger witness size $m\ge ES(k)$, and count all convex $k$-subsets inside each $m$-subset.
+
+Concretely, let
+$$
+h(m,k):=\min_{|Q|=m}\mathrm{conv}_k(Q),
+$$
+where the minimum is over $m$-point sets in general position.
+Set up the exact multiplicity-weighted double count relating $h(m,k)$ to $\mathrm{conv}_k(P)$ for an $n$-point set $P$, and then answer the focused question:
+
+Can any asymptotic choice of $m,k$ using only general facts currently available in the repo provably beat the $\frac14$ coefficient, or does this strengthened averaging route also stall at $\frac14$?
+
+What I need:
+1. A clean derivation of the multiplicity-aware double-counting inequality.
+2. Either:
+   - a concrete lower-bound improvement beyond quadratic constant $\frac14$, or
+   - a precise barrier statement explaining why this route still does not improve the constant with the current inputs.
+3. Repo-item-ready markdown if successful.
+
+Requirements:
+- Keep it self-contained.
+- Do not use literature/web.
+- Do not branch into upper-bound constructions or unrelated mechanisms.
+- This is one focused question: does multiplicity-aware averaging improve on pure averaging, and if so by how much?
+"""

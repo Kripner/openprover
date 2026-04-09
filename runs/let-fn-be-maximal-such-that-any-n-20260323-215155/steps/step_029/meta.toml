@@ -1,0 +1,7 @@
+timestamp = "2026-03-25T03:10:23.108529+00:00"
+step = 29
+status = "llm_error"
+action = ""
+error = """
+Reading prompt from stdin...
+"""
