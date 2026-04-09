@@ -1,0 +1,18 @@
+Use [[lemmas/one-split-fixed-state-recurrence]], [[lemmas/one-split-crossing-cup-cap-identities]], and [[bounds/upper-bound-recursive-family]].
+
+Work on exactly one task: identify the first place where exactness is lost when one passes from the exact fixed-state recurrence in the one-split model to the coarse recursive-family counting argument used for the upper bound.
+
+Deliverable:
+- Start from the exact state-level formula in [[lemmas/one-split-fixed-state-recurrence]].
+- Write the exact identity obtained after summing over all states/endpoints for spanning convex subsets in $P_m=L_m\sqcup R_m$ of a fixed split size $(a,b)$.
+- Then compare that exact formula to the coarse quantities used in [[bounds/upper-bound-recursive-family]].
+- Pin down the first projection/coarsening step where exactness is replaced by an inequality, and state precisely what endpoint/state information is being forgotten there.
+- Say whether that specific loss is enough to explain why the current recursive-family argument still yields the exponent constant $1$, or whether the obstruction lies later.
+
+Requirements:
+- Keep the output as a short polished note suitable to store directly as one repo item.
+- Be explicit about which formulas are exact identities and which are only inequalities.
+- Do not do literature, Lean, or unrelated asymptotic optimization.
+- Do not revisit the already-settled local gluing proof except insofar as needed to quote it.
+
+A suitable slug would be `status/recursive-family-information-loss`.

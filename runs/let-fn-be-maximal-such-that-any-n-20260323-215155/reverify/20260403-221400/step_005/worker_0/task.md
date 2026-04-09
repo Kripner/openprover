@@ -1,0 +1,22 @@
+**Task**: Compute the precise asymptotic of the number of convex subsets in the Erdős-Szekeres extremal construction, and determine $\frac{\log_2(\text{#convex subsets})}{(\log_2 n)^2}$ as $n \to \infty$.
+
+**Setup**: The ES extremal construction gives $n = \binom{2k-2}{k-1}$ points in general position with no $(k+1)$-point subset in convex position. This means every convex subset has size at most $k$.
+
+**What to compute**:
+1. Express $k$ in terms of $n$ asymptotically. Since $\binom{2k-2}{k-1} \sim \frac{4^{k-1}}{\sqrt{\pi(k-1)}}$, determine $\log_2 n$ in terms of $k$.
+
+2. Upper bound: The total number of convex subsets is $\leq \sum_{j=0}^{k}\binom{n}{j}$. Compute $\log_2$ of this sum asymptotically, using the fact that $k = o(n)$ so the sum is dominated by the largest term $\binom{n}{k}$.
+
+3. Lower bound on convex subsets within this specific construction: Consider the structure of the ES construction. The points can be constructed as follows: take $n$ points on the moment curve, but actually the ES cups-caps construction arranges $\binom{2k-2}{k-1}$ points so that the maximum cup has size $k$ and maximum cap has size $k$. The number of cups (subsets in "cup position", i.e., increasing slopes) of various sizes, and similarly caps, contributes to convex subsets.
+
+In this construction, how many $k$-element convex subsets are there? A $k$-element convex subset must be either a $k$-cup or $k$-cap (since if it had both increasing and decreasing slope sections, it could potentially be extended). 
+
+Actually, consider: in the ES construction, each point gets a unique label $(a,b)$ with $a+b = k+1$ (where $a$ = max cup ending there, $b$ = max cap ending there, and these lie on the "staircase" of the grid). Actually no — the pairs $(a_i, b_i)$ range over all $(a,b)$ with $1 \leq a \leq k$, $1 \leq b \leq k$, and they satisfy $a+b \leq k+1$. Wait, the constraint is that the pairs are exactly those with $a + b - 1 \leq k$... Let me not overcomplicate.
+
+The main thing is:
+- Compute $\log_2\left(\sum_{j=0}^{k}\binom{n}{j}\right)$ when $n = \binom{2k-2}{k-1}$ and show this equals $\frac{1}{2}(\log_2 n)^2(1+o(1))$.
+- Also determine whether $f(n)$ in this construction is actually close to this upper bound or much smaller.
+
+**Key question**: Is $\frac{\log_2 f(n)}{(\log_2 n)^2} \to \frac{1}{2}$ from above (i.e., the ES construction achieves $\sim 2^{\frac{1}{2}(\log_2 n)^2}$ convex subsets)?
+
+Please provide a clean, rigorous asymptotic calculation.

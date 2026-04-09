@@ -1,0 +1,23 @@
+timestamp = "2026-03-24T02:06:30.146022+00:00"
+step = 2
+status = "ok"
+action = "literature_search"
+
+[planner]
+cost_usd = 0.032845
+duration_ms = 13277
+input_tokens = 2994
+output_tokens = 715
+cache_creation_tokens = 0
+cache_read_tokens = 0
+model = "opus"
+stop_reason = "end_turn"
+
+[[workers]]
+index = 0
+cost_usd = 4.188362449999999
+duration_ms = 849236
+input_tokens = 6011
+output_tokens = 31342
+cache_creation_tokens = 72724
+cache_read_tokens = 1079504

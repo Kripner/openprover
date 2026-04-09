@@ -1,0 +1,7 @@
+No mathematical flaw stands out in the worker’s note, provided the theorem is read under the worker’s explicit separated-position hypothesis, not a weaker informal variant.
+
+- The forward classification is sound. The secant-separation assumptions force any two-block convex subset to place the earlier block on $U(S)$ as a cap and the later block on $D(S)$ as a cup. In the three-block case, the same consecutive-edge contradiction shows $D(S)$ has exactly one $L$-vertex, $U(S)$ exactly one $R$-vertex, and $M$ contributes at most one vertex to each hull.
+- The bridge-line description is also correct. After fixing $A=(S\cap L)\cup(S\cap R)$, the part of $\partial\operatorname{conv}(A)$ over the middle strip is exactly the upper edge $\lambda r$ and lower edge $\ell\rho$, so every middle vertex must lie in $M^\uparrow(\lambda,r)\cup M^\downarrow(\ell,\rho)$. Conversely, any optional choice of $m^\uparrow$ above $\lambda r$ and/or $m^\downarrow$ below $\ell\rho$ gives an upper cap chain and lower cup chain, hence a convex polygon. That makes the stated $c=1,2$ formulas exact, and $c\ge 3$ impossible.
+- The only thing I would call out is editorial: $Q_\pm$ are used without being locally defined, so strict self-containedness would benefit from one sentence defining them as endpoint-refined cap/cup counts. That is not a mathematical defect.
+
+VERDICT: CORRECT

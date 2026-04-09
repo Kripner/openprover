@@ -1,0 +1,25 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Verify the comprehensive proof for correctness and completeness"
+description = """
+Please carefully verify the following proof for mathematical correctness, completeness, and rigor. Check every claim, every inequality, every logical step. Flag any gaps, errors, or hand-waved steps.
+
+The proof establishes bounds on $f(n)$, the minimum number of convex subsets determined by any $n$ points in general position in $\mathbb{R}^2$.
+
+Here is the proof: [[proof/final-estimate]]
+
+Specific things to check:
+1. Is the averaging argument in Part I correct? Does the double-counting work? Is the asymptotic optimization correct?
+2. Is the recursive construction in Part II well-defined? Does the separated position property hold?
+3. Is the cup/cap induction correct? Do the bounds combine correctly?
+4. Is the chain-pair injection valid? (Every convex $k$-subset decomposes into an upper hull cup and a lower hull cap sharing two endpoints.)
+5. Is the exponent optimization correct? Is $\phi_m(k)$ maximized near $k = 2m-1$ with value $m^2 + m$?
+6. Is the extension to arbitrary $n$ valid?
+7. Is the final summary logically consistent with the proved bounds?
+8. Are there any steps that are insufficiently justified or that a knowledgeable reader could not verify?
+
+Give a detailed assessment and a final verdict: CORRECT or FLAWED (with specific issues).
+
+"""

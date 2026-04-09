@@ -4,13 +4,18 @@ import json
 import logging
 import os
 import re
-import signal
 import subprocess
 import threading
 import time
 from pathlib import Path
 
-from ._base import Interrupted, archive
+from ._base import (
+    Interrupted,
+    QuotaExceeded,
+    archive,
+    is_quota_exceeded_error,
+    kill_process_tree,
+)
 
 logger = logging.getLogger("openprover.llm")
 
@@ -18,17 +23,21 @@ logger = logging.getLogger("openprover.llm")
 class LLMClient:
     """Calls Claude via the CLI and archives all interactions."""
 
+    provider = "claude"
     context_length = 200_000  # Claude models
+    supports_mcp_tools = True
 
     def __init__(self, model: str, archive_dir: Path,
                  max_output_tokens: int = 128_000,
-                 effort: str | None = None):
+                 reasoning_effort: str | None = None,
+                 requested_model: str | None = None):
         self.model = model
+        self.requested_model = requested_model or model
         self.archive_dir = archive_dir
         self.call_count = 0
         self.total_cost = 0.0
         self.max_output_tokens = max_output_tokens
-        self.effort = effort
+        self.reasoning_effort = reasoning_effort
         self.mcp_config: dict | None = None  # set by Prover for MCP tool-calling
         self._interrupted = threading.Event()
         self._soft_interrupted = threading.Event()
@@ -39,8 +48,8 @@ class LLMClient:
             **os.environ,
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(max_output_tokens),
         }
-        if effort:
-            self._env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+        if reasoning_effort:
+            self._env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning_effort
 
     def interrupt(self):
         """Signal all active LLM calls to stop."""
@@ -60,10 +69,7 @@ class LLMClient:
         with self._procs_lock:
             for proc in self._active_procs:
                 if proc.poll() is None:
-                    try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except (OSError, ProcessLookupError):
-                        proc.kill()
+                    kill_process_tree(proc)
 
     def clear_interrupt(self):
         """Reset the interrupt flag so new calls can proceed."""
@@ -73,6 +79,38 @@ class LLMClient:
     def clear_soft_interrupt(self):
         """Reset only the soft interrupt flag (before Phase 2 calls)."""
         self._soft_interrupted.clear()
+
+    def _build_cmd(self, *, system_prompt: str, json_schema: dict | None,
+                   web_search: bool, use_streaming: bool) -> list[str]:
+        """Build a Claude CLI command for a single call."""
+        cmd = [
+            "claude", "-p",
+            "--model", self.model,
+            "--system-prompt", system_prompt,
+        ]
+        if self.reasoning_effort:
+            cmd.extend(["--effort", self.reasoning_effort])
+
+        if use_streaming:
+            cmd.extend(["--output-format", "stream-json", "--verbose",
+                         "--include-partial-messages"])
+        else:
+            cmd.extend(["--output-format", "json"])
+
+        if web_search:
+            cmd.extend(["--permission-mode", "bypassPermissions",
+                         "--allowedTools", "WebSearch WebFetch"])
+        elif self.mcp_config:
+            cmd.extend(["--mcp-config", json.dumps(self.mcp_config),
+                         "--strict-mcp-config",
+                         "--permission-mode", "bypassPermissions",
+                         "--allowedTools",
+                         "mcp__lean_tools__lean_verify mcp__lean_tools__lean_search"])
+        else:
+            cmd.extend(["--tools", ""])
+        if json_schema:
+            cmd.extend(["--json-schema", json.dumps(json_schema)])
+        return cmd
 
     def call(
         self,
@@ -120,31 +158,12 @@ class LLMClient:
             logger.info("[%s] interrupted before call started", label)
             raise Interrupted()
 
-        cmd = [
-            "claude", "-p",
-            "--model", self.model,
-            "--system-prompt", system_prompt,
-        ]
-
-        if use_streaming:
-            cmd.extend(["--output-format", "stream-json", "--verbose",
-                         "--include-partial-messages"])
-        else:
-            cmd.extend(["--output-format", "json"])
-
-        if web_search:
-            cmd.extend(["--permission-mode", "bypassPermissions",
-                         "--allowedTools", "WebSearch WebFetch"])
-        elif self.mcp_config:
-            cmd.extend(["--mcp-config", json.dumps(self.mcp_config),
-                         "--strict-mcp-config",
-                         "--permission-mode", "bypassPermissions",
-                         "--allowedTools",
-                         "mcp__lean_tools__lean_verify mcp__lean_tools__lean_search"])
-        else:
-            cmd.extend(["--tools", ""])
-        if json_schema:
-            cmd.extend(["--json-schema", json.dumps(json_schema)])
+        cmd = self._build_cmd(
+            system_prompt=system_prompt,
+            json_schema=json_schema,
+            web_search=web_search,
+            use_streaming=use_streaming,
+        )
 
         env = self._env
         if max_tokens:
@@ -186,6 +205,10 @@ class LLMClient:
             if self._interrupted.is_set():
                 logger.info("[%s] interrupted after %dms", label, elapsed_ms)
                 raise Interrupted()
+            if is_quota_exceeded_error(stderr):
+                raise QuotaExceeded(
+                    f"Claude CLI failed (exit {proc.returncode}): {stderr[:500]}"
+                )
             raise RuntimeError(f"Claude CLI failed (exit {proc.returncode}): {stderr[:500]}")
 
         try:
@@ -221,6 +244,8 @@ class LLMClient:
                 }
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           raw, subtype, elapsed_ms, archive_path)
+            if is_quota_exceeded_error(err):
+                raise QuotaExceeded(f"Claude CLI error: {err}")
             raise RuntimeError(f"Claude CLI error: {subtype}")
 
         # When using --json-schema, structured output is in 'structured_output'
@@ -453,6 +478,8 @@ class LLMClient:
             stderr = proc.stderr.read()
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           None, stderr, elapsed_ms, archive_path)
+            if is_quota_exceeded_error(stderr):
+                raise QuotaExceeded(f"No result from streaming call: {stderr[:500]}")
             raise RuntimeError(f"No result from streaming call: {stderr[:500]}")
 
         subtype = result_data.get("subtype", "")
@@ -481,6 +508,8 @@ class LLMClient:
                 }
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           result_data, err, elapsed_ms, archive_path)
+            if is_quota_exceeded_error(err):
+                raise QuotaExceeded(f"Claude CLI streaming error: {err[:500]}")
             raise RuntimeError(f"Claude CLI streaming error: {err[:500]}")
 
         cost = result_data.get("total_cost_usd", 0.0)
@@ -511,4 +540,7 @@ class LLMClient:
                  *, thinking="", result_text=""):
         archive(self.model, self.archive_dir, call_num, label, prompt,
                 system_prompt, json_schema, response, error, elapsed_ms,
-                archive_path, thinking=thinking, result_text=result_text)
+                archive_path, thinking=thinking, result_text=result_text,
+                provider=self.provider,
+                requested_model=self.requested_model,
+                reasoning_effort=self.reasoning_effort or "")

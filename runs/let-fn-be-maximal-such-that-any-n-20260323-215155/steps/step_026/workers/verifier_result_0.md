@@ -1,0 +1,5 @@
+- The worker’s main correction is right. From the split-hull description, \(S\cap L\) sits on the lower hull from \(\ell\) to \(\lambda\), so it is a left cup, while \(S\cap R\) sits on the upper hull from \(\rho\) to \(r\), so it is a right cap. That is exactly the opposite of the flawed draft’s bad assignment.
+- The fixed-state product formula is justified. Injectivity is immediate from \(S=(S\cap L)\sqcup(S\cap R)\). For surjectivity, the split inequalities are used in the correct direction: a cup in \(L\) extends to a lower hull chain after adjoining \(r\), and a cap in \(R\) extends to an upper hull chain after adjoining \(\ell\). The edge cases \(a=1\) and/or \(b=1\) are handled correctly by the degenerate counts \(\widetilde Q_+\) and \(\widetilde Q_-\).
+- The state sum is also exact, not just an inequality, because each spanning convex subset has a unique state \((\ell,\lambda,\rho,r)\). I do not see a mathematical gap; there are only minor cosmetic notation typos.
+
+VERDICT: CORRECT

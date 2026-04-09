@@ -1,0 +1,3 @@
+action = "read_items"
+summary = "Read both verified bound proofs to assess submittability"
+read = ["bounds/lower-bound-averaging", "bounds/upper-bound-recursive-family"]

@@ -1,0 +1,10 @@
+timestamp = "2026-04-04T11:18:19.920951"
+provider = "claude"
+model = "opus"
+reasoning_effort = "max"
+repair_broken = true
+target_policy = "accepted_only"
+step_filter = ""
+worker_filter = ""
+target_items = 15
+completed_items = 15

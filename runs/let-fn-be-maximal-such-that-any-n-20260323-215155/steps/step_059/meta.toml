@@ -1,0 +1,14 @@
+timestamp = "2026-04-01T13:42:31.977781+00:00"
+step = 59
+status = "ok"
+action = "submit_proof"
+
+[planner]
+cost_usd = 0.3616775
+duration_ms = 118658
+input_tokens = 3
+output_tokens = 7576
+cache_creation_tokens = 27562
+cache_read_tokens = 0
+model = "opus"
+stop_reason = "end_turn"

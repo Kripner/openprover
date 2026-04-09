@@ -70,14 +70,18 @@ STREAM_READ_TIMEOUT = 30
 class HFClient:
     """Calls an OpenAI-compatible HTTP server (e.g. serve_hf.py) and archives interactions."""
 
+    provider = "local"
+
     def __init__(self, model: str, archive_dir: Path, base_url: str = "http://localhost:8000",
-                 answer_reserve: int = 4096, vllm: bool = False):
+                 answer_reserve: int = 4096, vllm: bool = False,
+                 requested_model: str | None = None):
         if model not in MODEL_CONTEXT_LENGTHS:
             raise ValueError(
                 f"Unknown model {model!r}. "
                 f"Known models: {', '.join(MODEL_CONTEXT_LENGTHS)}"
             )
         self.model = model
+        self.requested_model = requested_model or model
         self.base_url = base_url.rstrip("/")
         self.archive_dir = archive_dir
         self.call_count = 0
@@ -671,4 +675,7 @@ class HFClient:
                  *, thinking="", result_text=""):
         archive(self.model, self.archive_dir, call_num, label, prompt,
                 system_prompt, json_schema, response, error, elapsed_ms,
-                archive_path, thinking=thinking, result_text=result_text)
+                archive_path, thinking=thinking, result_text=result_text,
+                provider=self.provider,
+                requested_model=self.requested_model,
+                reasoning_effort="")

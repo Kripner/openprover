@@ -1,0 +1,24 @@
+Work only on a single structural question for the recursive construction behind [[bounds/upper-bound-recursive-family]].
+
+Context you may use:
+- $P_1$ is a two-point set.
+- For $m\ge 2$, $P_m=L_m\sqcup R_m$ where $L_m,R_m$ are affine copies of $P_{m-1}$ placed in the standard recursively separated position, so $|P_m|=2^m$.
+- The current counting approach loses information because a convex subset has common leftmost/rightmost endpoints for its upper and lower hull chains.
+
+Your one task:
+Take a convex subset $S\subset P_m$ with $S\cap L_m\neq\varnothing$ and $S\cap R_m\neq\varnothing$, and determine the exact structural decomposition of $S$ across the split.
+
+Deliverable:
+- State precise geometric hypotheses on the “standard recursively separated position” if they are needed.
+- Prove a rigorous structural lemma describing how the vertices of $S$ can sit in $L_m$ and $R_m$, including the roles of the common leftmost/rightmost endpoints and how the upper/lower hull chains restrict to each side.
+- From that lemma, define the minimal endpoint/state data that one would need for a later recurrence.
+
+Stop there. Do not do any asymptotic counting, recurrence solving, or optimization in this task.
+
+Requirements:
+1. Keep the note short and self-contained.
+2. If the wording “standard recursively separated position” is too ambiguous, identify exactly what extra hypothesis is required.
+3. Be explicit about why the state data you define really enforces endpoint matching.
+4. Do not write Lean.
+
+Return a single note suitable to store as a lemma item.

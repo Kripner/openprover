@@ -1,0 +1,56 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Decide whether the explicit balanced-ternary template already has an infinite bridge-pair orbit under exact conjugation"
+description = """
+Use [[status/balanced-ternary-concrete-bridge-obstruction]] and [[attempts/balanced-ternary-bridge-conjugation-expansion]].
+
+Focus on exactly one question: in the explicit template
+$$
+\Phi_i(x)=Ax+t_i,\qquad
+A=\operatorname{diag}(1/10,1/100),
+$$
+with
+$$
+t_L=(-4,2),\qquad t_M=(0,0),\qquad t_R=(5,-2),
+$$
+does repeated exact bridge conjugation already force infinitely many distinct affine bridge pairs, modulo actual affine symmetries of the template?
+
+Context already established:
+- [[status/balanced-ternary-concrete-bridge-obstruction]] proves the template is valid and has only the identity affine symmetry.
+- The standard bridge pair is
+$$
+\alpha_0=\mathrm{id}+(-40,200),\qquad \beta_0=\mathrm{id}+(50,-200).
+$$
+- The first exact expansion already yields
+$$
+\alpha_1=\mathrm{id}+(-400,20000),\qquad \beta_1=\mathrm{id}+(500,-20000)
+$$
+from the $(i,j,k)=(M,M,M)$ summand.
+- The exact bridge expansion is
+$$
+H_n^\pm[\alpha,\beta](\Phi_i(x'),\Phi_j(y'))
+=
+\sum_{k\in\{L,M,R\}}
+H_{n-1}^\pm[\Phi_k^{-1}\alpha\Phi_i,\Phi_k^{-1}\beta\Phi_j](x',y').
+$$
+
+What to do:
+1. Analyze the affine-pair dynamics in this explicit common-linear-part template, with emphasis on iterating the same exact conjugation mechanism.
+2. Determine whether one gets infinitely many distinct required bridge pairs up to actual template symmetry.
+3. If yes, give a clean proof and formulate the exact consequence carefully:
+   - enough to say that no finite bridge-pair state space can close for this template within this affine-pair recursion framework.
+   - do not overclaim beyond what is proved.
+4. If no, characterize the finite orbit/closed family exactly.
+5. Output repo-ready markdown with a `Summary:` line.
+   - If the orbit is infinite, suitable slug: `status/balanced-ternary-infinite-bridge-orbit-obstruction`.
+   - Otherwise use a slug describing the exact finite closure.
+6. Keep the task tightly scoped to this orbit/closure question. Do not revisit asymptotics, binary constructions, or unrelated templates.
+
+Requirements:
+- Exact identities only; keep inequalities out unless genuinely needed.
+- Use the already established no-symmetry fact rather than redoing unnecessary geometry.
+- The desired output is a decisive repo-ready note, or a precise partial note if one subtle point remains.
+
+"""

@@ -1,0 +1,364 @@
+{
+  "model": "gpt-5.4",
+  "usage": {
+    "input_tokens": 138097,
+    "output_tokens": 25703,
+    "cache_read_input_tokens": 104960
+  },
+  "stop_reason": "completed",
+  "events": [
+    {
+      "type": "thread.started",
+      "thread_id": "019d2767-dcbc-7c63-9d0c-0dcb39e51ab5"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_0",
+        "type": "agent_message",
+        "text": "I’m treating this as a local note-writing task. I’ll inspect the repo structure and the referenced notes first, then I’ll derive the ternary split classification and write a repo-ready markdown note if the formulation closes cleanly."
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_1",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"sed -n '1,220p' lemmas/one-split-structure-spanning-convex-subsets.md\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_1",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"sed -n '1,220p' lemmas/one-split-structure-spanning-convex-subsets.md\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_2",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"pwd && rg --files . | rg '\"'^(lemmas|attempts|status)/'\"'\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_2",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"pwd && rg --files . | rg '\"'^(lemmas|attempts|status)/'\"'\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_3",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"sed -n '1,260p' lemmas/one-split-fixed-state-recurrence.md\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_3",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"sed -n '1,260p' lemmas/one-split-fixed-state-recurrence.md\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_4",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"sed -n '1,260p' status/fixed-lag-separated-recursions-obstruction.md\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_4",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"sed -n '1,260p' status/fixed-lag-separated-recursions-obstruction.md\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_5",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"sed -n '1,240p' lemmas/one-split-crossing-cup-cap-identities.md\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_5",
+        "type": "command_execution",
+        "command": "/bin/bash -lc \"sed -n '1,240p' lemmas/one-split-crossing-cup-cap-identities.md\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_6",
+        "type": "agent_message",
+        "text": "The shell wrapper is failing with the default login setup, so I’m retrying with a plain non-login shell and then I’ll use the on-disk notes as the exact formatting/template reference."
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_7",
+        "type": "command_execution",
+        "command": "/bin/bash -c pwd",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_7",
+        "type": "command_execution",
+        "command": "/bin/bash -c pwd",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_8",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"sed -n '1,260p' lemmas/one-split-fixed-state-recurrence.md\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_8",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"sed -n '1,260p' lemmas/one-split-fixed-state-recurrence.md\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_9",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"sed -n '1,220p' lemmas/one-split-structure-spanning-convex-subsets.md\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_9",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"sed -n '1,220p' lemmas/one-split-structure-spanning-convex-subsets.md\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_10",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"rg --files . | rg '\"'^(lemmas|attempts|status)/'\"'\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_10",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"rg --files . | rg '\"'^(lemmas|attempts|status)/'\"'\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_11",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"sed -n '1,260p' status/fixed-lag-separated-recursions-obstruction.md\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_11",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"sed -n '1,260p' status/fixed-lag-separated-recursions-obstruction.md\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_12",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"sed -n '1,240p' lemmas/one-split-crossing-cup-cap-identities.md\"",
+        "aggregated_output": "",
+        "exit_code": null,
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_12",
+        "type": "command_execution",
+        "command": "/bin/bash -c \"sed -n '1,240p' lemmas/one-split-crossing-cup-cap-identities.md\"",
+        "aggregated_output": "bwrap: Unknown option --argv0\n",
+        "exit_code": 1,
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_13",
+        "type": "agent_message",
+        "text": "I have the local geometry pinned down. The clean version is the vertical dual of the binary split: earlier-block secants lie above later blocks, and later-block secants lie below earlier blocks. Under that hypothesis the ternary classification closes exactly, and the middle block contributes at most one upper bridge point and at most one lower bridge point.\n\nPlan:\n1. State the precise ternary separated-position hypothesis and the exact two-block classification.\n2. Prove the three-block structure: \\(L\\) is an upper cap, \\(R\\) is a lower cup, and \\(M\\) splits into disjoint upper/lower bridge regions with at most one point in each.\n3. Record the exact fixed-state formulas, including the exact \\(c=1\\) and \\(c=2\\) middle-block counts, and then write the note to `lemmas/ternary-one-split-structure.md`."
+      }
+    },
+    {
+      "type": "item.started",
+      "item": {
+        "id": "item_14",
+        "type": "todo_list",
+        "items": [
+          {
+            "text": "Derive exact ternary structure and fixed-state formulas for two-block and three-block convex subsets",
+            "completed": false
+          },
+          {
+            "text": "Write repo-ready markdown note at lemmas/ternary-one-split-structure.md",
+            "completed": false
+          },
+          {
+            "text": "Review the note for exact-vs-inequality claims and final consistency",
+            "completed": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_15",
+        "type": "agent_message",
+        "text": "I’m writing the note now. The key point I’m encoding is that the two outer blocks still have pure cap/cup behavior, but the middle block is not a chain type at all; it is a pair of endpoint-dependent bridge regions, and that is exactly the new state a ternary recurrence would have to carry."
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_16",
+        "type": "file_change",
+        "changes": [
+          {
+            "path": "/home/josh/projects/openprover/runs/let-fn-be-maximal-such-that-any-n-20260323-215155/lemmas/ternary-one-split-structure.md",
+            "kind": "add"
+          }
+        ],
+        "status": "failed"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_17",
+        "type": "agent_message",
+        "text": "I couldn’t persist the file because every tool call is failing in this run with `bwrap: Unknown option --argv0`. Here is repo-ready markdown for `lemmas/ternary-one-split-structure.md`.\n\n```markdown\nSummary: In a clean left-middle-right ternary split with the vertical-dual one-split orientation, every convex subset meeting more than one block is classified exactly as follows: for any two-block span, the earlier block contributes a cap and the later block contributes a cup; for a three-block span, the left block is a cap, the right block is a cup, and the middle block contributes at most one upper bridge point and at most one lower bridge point, determined by the endpoint-dependent bridge lines $\\lambda r$ and $\\ell\\rho$. All formulas below are exact identities.\n\nLet\n$$\nP=L\\sqcup M\\sqcup R\n$$\nbe a finite planar point set in general position. After a sufficiently small generic rotation, assume all $x$-coordinates are distinct and\n$$\nx(L)<x(M)<x(R).\n$$\n\nWe use the following precise ternary separated-position hypothesis.\n\n## Ternary separated position\n\nAssume:\n\n1. every line through two points of $L$ lies strictly above every point of $M\\cup R$;\n2. every line through two points of $M$ lies strictly below every point of $L$ and strictly above every point of $R$;\n3. every line through two points of $R$ lies strictly below every point of $L\\cup M$.\n\nEquivalently: for each earlier-later pair of blocks, every secant of the earlier block lies strictly above the later block, and every secant of the later block lies strictly below the earlier block.\n\nFor a set $S$ in convex position, write $U(S)$ and $D(S)$ for the upper and lower hull chains, both listed from left to right. A chain is a cup if its consecutive slopes are strictly increasing, and a cap if its consecutive slopes are strictly decreasing.\n\n## Lemma\n\nLet $S\\subseteq P$ be in convex position and assume that $S$ meets more than one block.\n\n### 1. Subsets meeting exactly two blocks\n\nIf $S$ meets exactly two blocks, say an earlier block $X$ and a later block $Y$, then:\n\n- the points of $S\\cap X$ are exactly the $X$-vertices on $U(S)$, hence $S\\cap X$ is a cap in $X$;\n- the points of $S\\cap Y$ are exactly the $Y$-vertices on $D(S)$, hence $S\\cap Y$ is a cup in $Y$.\n\nSo, exactly:\n\n- for $L\\cup M$: the $L$-part is a cap and the $M$-part is a cup;\n- for $M\\cup R$: the $M$-part is a cap and the $R$-part is a cup;\n- for $L\\cup R$: the $L$-part is a cap and the $R$-part is a cup.\n\nThese are exact structural identities.\n\n### 2. Subsets meeting all three blocks\n\nAssume now\n$$\nS\\cap L\\neq\\varnothing,\\qquad S\\cap M\\neq\\varnothing,\\qquad S\\cap R\\neq\\varnothing.\n$$\nWrite\n$$\n\\ell=\\min_x S\\in L,\\qquad r=\\max_x S\\in R,\n$$\n$$\n\\lambda=\\max_x(S\\cap L),\\qquad \\rho=\\min_x(S\\cap R),\n$$\nand list\n$$\nS\\cap L=\\{v_1=\\ell<\\cdots<v_a=\\lambda\\},\\qquad\nS\\cap R=\\{u_1=\\rho<\\cdots<u_b=r\\}.\n$$\n\nThen:\n\n1. $D(S)$ contains exactly one vertex from $L$, namely $\\ell$.\n2. $U(S)$ contains exactly one vertex from $R$, namely $r$.\n3. $U(S)$ contains at most one vertex from $M$.\n4. $D(S)$ contains at most one vertex from $M$.\n\nHence\n$$\nU(S)=v_1,\\dots,v_a,\\;m^\\uparrow,\\;r\n$$\nwith $m^\\uparrow$ omitted if $U(S)\\cap M=\\varnothing$, and\n$$\nD(S)=\\ell,\\;m^\\downarrow,\\;u_1,\\dots,u_b\n$$\nwith $m^\\downarrow$ omitted if $D(S)\\cap M=\\varnothing$.\n\nConsequently:\n\n- $S\\cap L$ is a cap in $L$ with endpoints $(\\ell,\\lambda)$;\n- $S\\cap R$ is a cup in $R$ with endpoints $(\\rho,r)$;\n- $|S\\cap M|\\in\\{1,2\\}$;\n- if $|S\\cap M|=2$, then one middle point lies on $U(S)$ and one lies on $D(S)$.\n\nSo the middle block is not a cup/cap chain. Its exact local type is an upper bridge point together with a lower bridge point, each optional but not both absent.\n\nDefine the bridge regions\n$$\nM^\\uparrow(\\lambda,r):=\\{m\\in M:\\text{$m$ lies strictly above the line }\\lambda r\\},\n$$\n$$\nM^\\downarrow(\\ell,\\rho):=\\{m\\in M:\\text{$m$ lies strictly below the line }\\ell\\rho\\}.\n$$\nThen\n$$\nm^\\uparrow\\in M^\\uparrow(\\lambda,r),\\qquad\nm^\\downarrow\\in M^\\downarrow(\\ell,\\rho),\n$$\nand the two regions are disjoint.\n\nConversely, let\n$$\nA=\\{v_1=\\ell<\\cdots<v_a=\\lambda\\}\\subseteq L\n$$\nbe any cap in $L$, and let\n$$\nB=\\{u_1=\\rho<\\cdots<u_b=r\\}\\subseteq R\n$$\nbe any cup in $R$. Choose\n$$\nm^\\uparrow\\in M^\\uparrow(\\lambda,r)\\cup\\{\\bot\\},\\qquad\nm^\\downarrow\\in M^\\downarrow(\\ell,\\rho)\\cup\\{\\bot\\},\n$$\nnot both equal to $\\bot$. Then\n$$\nS:=A\\cup B\\cup\\bigl(\\{m^\\uparrow\\}\\setminus\\{\\bot\\}\\bigr)\\cup\\bigl(\\{m^\\downarrow\\}\\setminus\\{\\bot\\}\\bigr)\n$$\nis in convex position, meets all three blocks, and has hull chains exactly\n$$\nU(S)=A,\\;m^\\uparrow,\\;r,\n\\qquad\nD(S)=\\ell,\\;m^\\downarrow,\\;B.\n$$\n\nThus the three-block classification is exact.\n\n## Proof\n\nThe two-block statement is the vertical dual of the binary one-split structure lemma. If an earlier block $X$ and a later block $Y$ are in the present orientation, then $U(S)$ cannot contain two vertices of $Y$, because an upper-hull edge through two points of $Y$ would have to lie above all of $S$, while every point of $X$ lies strictly above every $Y$-secant. Dually, $D(S)$ cannot contain two vertices of $X$, because a lower-hull edge through two points of $X$ would have to lie below all of $S$, while every point of $Y$ lies strictly below every $X$-secant. Hence the earlier block lies on the upper hull and forms a cap, while the later block lies on the lower hull and forms a cup.\n\nNow assume $S$ meets all three blocks.\n\nIf $D(S)$ contained two vertices of $L$, then the first two such vertices on $D(S)$ would be consecutive on $D(S)$. Since they form a lower-hull edge, all points of $S$ must lie on or above their line. But every point of $M\\cup R$ lies strictly below every $L$-secant, contradiction. So $D(S)$ contains exactly one $L$-vertex, namely $\\ell$.\n\nDually, $U(S)$ contains exactly one $R$-vertex, namely $r$.\n\nIf $U(S)$ contained two vertices of $M$, then the last two such vertices on $U(S)$ would be consecutive on $U(S)$, and their line would have to lie above all of $S$. But every point of $L$ lies strictly above every $M$-secant, contradiction. Hence $U(S)$ contains at most one $M$-vertex.\n\nSimilarly, if $D(S)$ contained two vertices of $M$, then the first two such vertices on $D(S)$ would be consecutive on $D(S)$, and their line would have to lie below all of $S$. But every point of $R$ lies strictly below every $M$-secant, contradiction. Hence $D(S)$ contains at most one $M$-vertex.\n\nTherefore all points of $S\\cap L\\setminus\\{\\ell\\}$ lie on $U(S)$, so $S\\cap L$ is a cap, and all points of $S\\cap R\\setminus\\{r\\}$ lie on $D(S)$, so $S\\cap R$ is a cup. This gives the stated hull formulas.\n\nSet\n$$\nA:=(S\\cap L)\\cup(S\\cap R).\n$$\nBy the already proved $L$-$R$ two-block case, $A$ is in convex position with upper hull\n$$\nv_1,\\dots,v_a,r\n$$\nand lower hull\n$$\n\\ell,u_1,\\dots,u_b.\n$$\nSince all points of $M$ lie strictly between the $x$-ranges of $L$ and $R$, the portion of $\\partial\\operatorname{conv}(A)$ across the $M$-strip is exactly the upper segment $\\lambda r$ and the lower segment $\\ell\\rho$.\n\nEvery point of $S\\cap M$ is a vertex of $\\operatorname{conv}(S)$, hence lies outside $\\operatorname{conv}(A)$. So each middle point lies either strictly above $\\lambda r$ or strictly below $\\ell\\rho$. This proves\n$$\nS\\cap M\\subseteq M^\\uparrow(\\lambda,r)\\cup M^\\downarrow(\\ell,\\rho).\n$$\nThe two regions are disjoint because $\\lambda r$ is the upper boundary and $\\ell\\rho$ is the lower boundary of $\\operatorname{conv}(A)$ across the $M$-strip. Together with the already proved at-most-one-on-each-hull statement, this yields $|S\\cap M|\\in\\{1,2\\}$ and the exact upper/lower placement.\n\nFor the converse, start from the $L$-$R$ convex set\n$$\nS_0:=A\\cup B.\n$$\nIts upper hull is $A,r$, and its lower hull is $\\ell,B$.\n\nIf $m^\\uparrow\\in M^\\uparrow(\\lambda,r)$, then $\\lambda,m^\\uparrow,r$ is a $3$-cap. Indeed, if $a=1$, this is exactly the condition that $m^\\uparrow$ lie above $\\ell r$. If $a\\ge2$, then the last edge of the cap $A$ has slope $\\operatorname{slope}(v_{a-1},v_a)$, every point of $M$ lies strictly below the line $v_{a-1}v_a$, so\n$$\n\\operatorname{slope}(v_{a-1},v_a)>\\operatorname{slope}(v_a,m^\\uparrow),\n$$\nand $m^\\uparrow$ above the line $\\lambda r$ gives\n$$\n\\operatorname{slope}(v_a,m^\\uparrow)>\\operatorname{slope}(m^\\uparrow,r).\n$$\nHence $A,m^\\uparrow,r$ is a cap.\n\nDually, if $m^\\downarrow\\in M^\\downarrow(\\ell,\\rho)$, then $\\ell,m^\\downarrow,B$ is a cup.\n\nSo the chosen upper chain is a cap from $\\ell$ to $r$, and the chosen lower chain is a cup from $\\ell$ to $r$. Therefore all interior vertices of the upper chain lie strictly above the chord $\\ell r$, and all interior vertices of the lower chain lie strictly below $\\ell r$. The two chains meet only at $\\ell$ and $r$, hence form the boundary of a convex polygon whose vertex set is exactly $S$.\n\nThis proves the converse. $\\square$\n\n## Exact fixed-state formulas\n\nDefine\n$$\n\\widetilde Q_-(a,L;\\ell,\\lambda):=\n\\begin{cases}\n1,& a=1\\text{ and }\\ell=\\lambda,\\\\\nQ_-(a,L;\\ell,\\lambda),& a\\ge2\\text{ and }\\ell<\\lambda,\\\\\n0,&\\text{otherwise,}\n\\end{cases}\n$$\nand\n$$\n\\widetilde Q_+(b,R;\\rho,r):=\n\\begin{cases}\n1,& b=1\\text{ and }\\rho=r,\\\\\nQ_+(b,R;\\rho,r),& b\\ge2\\text{ and }\\rho<r,\\\\\n0,&\\text{otherwise.}\n\\end{cases}\n$$\nAlso set\n$$\nU_M(\\lambda,r):=\\bigl|M^\\uparrow(\\lambda,r)\\bigr|,\n\\qquad\nD_M(\\ell,\\rho):=\\bigl|M^\\downarrow(\\ell,\\rho)\\bigr|.\n$$\n\n### Two-block identities\n\nFor each earlier-later pair $(X,Y)\\in\\{(L,M),(M,R),(L,R)\\}$, the endpoint-refined two-block count is exactly\n$$\n\\text{(cap count on $X$)}\\times \\text{(cup count on $Y$)}.\n$$\nThis is an exact identity.\n\n### Three-block identities\n\nLet\n$$\nC^{LMR}(a,c,b,P;\\ell,\\lambda,\\rho,r)\n$$\ndenote the number of convex subsets $S\\subseteq P$ with\n$$\n|S\\cap L|=a,\\qquad |S\\cap M|=c,\\qquad |S\\cap R|=b,\n$$\nmeeting all three blocks and having outer state $(\\ell,\\lambda,\\rho,r)$.\n\nThen:\n$$\nC^{LMR}(a,1,b,P;\\ell,\\lambda,\\rho,r)\n=\n\\widetilde Q_-(a,L;\\ell,\\lambda)\\,\n\\widetilde Q_+(b,R;\\rho,r)\\,\n\\bigl(U_M(\\lambda,r)+D_M(\\ell,\\rho)\\bigr),\n$$\n$$\nC^{LMR}(a,2,b,P;\\ell,\\lambda,\\rho,r)\n=\n\\widetilde Q_-(a,L;\\ell,\\lambda)\\,\n\\widetilde Q_+(b,R;\\rho,r)\\,\nU_M(\\lambda,r)\\,D_M(\\ell,\\rho),\n$$\nand for every $c\\ge3$,\n$$\nC^{LMR}(a,c,b,P;\\ell,\\lambda,\\rho,r)=0.\n$$\n\nThese are exact identities, not inequalities.\n\n## Why this is the necessary local step before any ternary recurrence\n\nIn the binary split, fixed-state convex subsets factor through two local chain states. In the ternary split, they do not: after fixing the outer cap state $(\\ell,\\lambda)$ on $L$ and the outer cup state $(\\rho,r)$ on $R$, the middle contribution still depends on the endpoint-dependent bridge regions\n$$\nM^\\uparrow(\\lambda,r),\\qquad M^\\downarrow(\\ell,\\rho).\n$$\nSo any exact ternary recurrence must carry this new bridge data. One cannot write an exact ternary recurrence using only aggregate cup/cap counts on the three blocks.\n\nThis note isolates that new local state exactly, without yet attempting any full ternary recursion or any asymptotic counting.\n```"
+      }
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "item_14",
+        "type": "todo_list",
+        "items": [
+          {
+            "text": "Derive exact ternary structure and fixed-state formulas for two-block and three-block convex subsets",
+            "completed": false
+          },
+          {
+            "text": "Write repo-ready markdown note at lemmas/ternary-one-split-structure.md",
+            "completed": false
+          },
+          {
+            "text": "Review the note for exact-vs-inequality claims and final consistency",
+            "completed": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 138097,
+        "cached_input_tokens": 104960,
+        "output_tokens": 25703
+      }
+    }
+  ]
+}

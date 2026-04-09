@@ -1,0 +1,31 @@
+Work only on the recursive construction from [[bounds/upper-bound-recursive-family]].
+
+Context:
+- $P_1$ is a two-point set.
+- For $m\ge 2$, $P_m=L_m\sqcup R_m$ where $L_m,R_m$ are affine copies of $P_{m-1}$ in the standard recursively separated position, so $|P_m|=2^m$.
+- The current upper bound comes from the coarse inequality
+  $$
+  C_k(P_m)\le \sum_{a=2}^k Q_+(a,P_m)\,Q_-(k+2-a,P_m),
+  $$
+  which loses endpoint information and gives only constant $1$ in the exponent.
+- The issue is that a convex $k$-set has common leftmost/rightmost endpoints for its upper and lower hull chains.
+
+Your single task:
+Define the smallest useful family of endpoint-refined quantities that remembers common endpoints, and derive the sharpest rigorous recurrence you can for those quantities under the split $P_m=L_m\sqcup R_m$.
+
+Keep this narrow. Do not try to finish the whole problem unless the recurrence itself immediately gives the bound.
+
+Deliverable:
+- precise definitions of the endpoint-refined counts;
+- rigorous recurrence(s) under $P_m=L_m\sqcup R_m$;
+- either:
+  1. a clean deduction of an improved upper bound for convex $k$-sets / total convex subsets, or
+  2. a clear obstruction showing why even this endpoint-sensitive recurrence does not beat the current constant.
+
+Requirements:
+1. Stay entirely on the construction side; no literature.
+2. One focused note only: recurrence plus consequence/obstruction.
+3. Be explicit about why the defined quantities correctly enforce endpoint matching.
+4. Do not write Lean.
+
+Return a self-contained note suitable to store as a lemma item or failed-attempt item.

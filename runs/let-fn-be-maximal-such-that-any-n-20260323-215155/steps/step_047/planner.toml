@@ -1,0 +1,40 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Test whether summing the averaging lower bound over all k can beat the 1/4 constant"
+description = """
+Focus only on the lower-bound side.
+
+Context:
+- [[bounds/lower-bound-averaging]] proves that for every $k$ with $ES(k)\le n$,
+  $$
+  f(n)\ge \frac{\binom{n}{k}}{\binom{ES(k)}{k}},
+  $$
+  and using Suk's $ES(k)=2^{k+o(k)}$ one gets the stored bound
+  $$
+  \log_2 f(n)\ge \left(\frac14-o(1)\right)(\log_2 n)^2
+  $$
+  by choosing one optimal $k\approx \frac12\log_2 n$.
+- The current binary recursive-family upper-bound route is not the task here.
+
+Task:
+Analyze the natural refinement obtained by summing over all admissible $k$:
+$$
+S(n):=\sum_{k:\ ES(k)\le n}\frac{\binom{n}{k}}{\binom{ES(k)}{k}}.
+$$
+Determine the quadratic-scale asymptotic of $\log_2 S(n)$.
+
+What I need:
+1. A rigorous estimate at the $(\log_2 n)^2$ scale:
+   does
+   $$
+   \log_2 S(n)=\left(\frac14+o(1)\right)(\log_2 n)^2
+   $$
+   or can the sum over many $k$ raise the leading constant above $\frac14$?
+2. If the constant stays $\frac14$, give a clean proof that the maximizing window has only lower-order total contribution.
+3. If the constant improves, state the improved lower bound for $f(n)$ clearly.
+4. Keep the argument self-contained and precise enough to store as a repo item if successful.
+
+Please do not branch into upper-bound constructions or literature. This is a single focused question: can multi-$k$ aggregation of the verified averaging lower bound improve the $\frac14$ constant?
+"""

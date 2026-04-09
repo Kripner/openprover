@@ -1,0 +1,31 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Audit and reconcile the convention clash between the fixed-state and crossing notes"
+description = """
+Use [[lemmas/one-split-fixed-state-recurrence]], [[lemmas/one-split-crossing-cup-cap-identities]], and [[lemmas/one-split-structure-spanning-convex-subsets]].
+
+Work on exactly one task: reconcile the apparent cup/cap convention mismatch between the stored fixed-state note and the stored crossing note.
+
+Deliverable:
+Produce a short repo-ready package that does all of the following:
+1. Extract the exact displayed formulas/conventions used in the two stored notes, with no reinterpretation.
+2. Decide whether the clash is:
+   - a genuine mathematical error in one item, or
+   - only a notation/label mismatch that can be repaired cleanly.
+3. Identify precisely which repo item(s) must be changed.
+4. Provide repo-ready replacement markdown for every affected item, or, if neither item is mathematically wrong, provide a repo-ready reconciliation note that makes the translation between conventions explicit.
+
+Requirements:
+- Keep the task narrowly focused on convention reconciliation only.
+- Be explicit about which formulas are exact identities.
+- Use [[lemmas/one-split-structure-spanning-convex-subsets]] only to determine the canonical side/type assignment if needed.
+- Do not do asymptotics, new proof strategy, literature, Lean, or the information-loss note yet.
+- The output should be ready for direct storage via `write_items`.
+
+Suitable slugs:
+- `status/one-split-convention-audit`
+- plus any corrected lemma slugs if replacements are needed.
+
+"""

@@ -1,0 +1,14 @@
+timestamp = "2026-03-31T23:36:14.124534+00:00"
+step = 54
+status = "ok"
+action = "read_items"
+
+[planner]
+cost_usd = 0.21714624999999999
+duration_ms = 86889
+input_tokens = 3
+output_tokens = 4702
+cache_creation_tokens = 15933
+cache_read_tokens = 0
+model = "opus"
+stop_reason = "end_turn"

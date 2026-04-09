@@ -1,0 +1,18 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Final independent verification of the complete proof"
+description = """
+Please carefully verify the following complete mathematical proof for correctness, completeness, and rigor. This is a final check before submission.
+
+[[proof/final-verified]]
+
+Check every claim, inequality, and logical step. In particular verify:
+1. Part I: double-counting, binomial identity, asymptotic optimization
+2. Part II: explicit bounding boxes (Lemma 1), slope bounds (Lemma 2), separation property (Lemma 3), general position (Lemma 4), chain-pair injection (Lemma 5) with correct cup/cap convention, cup/cap recursion (Lemma 6) with correct geometry, recursion solution (Lemma 7), explicit $d_r$ bound, $C_k$ bound (Lemma 8), exponent optimization, summation over $k$, extension to arbitrary $n$
+3. Part III: that the conclusion follows from Parts I and II
+
+Flag any gaps, errors, or insufficiently justified steps. Give a final verdict: CORRECT or FLAWED.
+
+"""

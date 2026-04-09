@@ -1,0 +1,63 @@
+{
+  "thread_start": {
+    "thread": {
+      "id": "019d464e-b7f5-7b23-bb0c-78ee4108e77b",
+      "preview": "",
+      "ephemeral": true,
+      "modelProvider": "openai",
+      "createdAt": 1775001057,
+      "updatedAt": 1775001057,
+      "status": {
+        "type": "idle"
+      },
+      "path": null,
+      "cwd": "/home/josh/projects/openprover",
+      "cliVersion": "0.117.0",
+      "source": "vscode",
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "turns": []
+    },
+    "model": "gpt-5.4",
+    "modelProvider": "openai",
+    "serviceTier": null,
+    "cwd": "/home/josh/projects/openprover",
+    "approvalPolicy": "never",
+    "approvalsReviewer": "user",
+    "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [
+        "/home/josh/.codex/memories"
+      ],
+      "readOnlyAccess": {
+        "type": "fullAccess"
+      },
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+    },
+    "reasoningEffort": "high"
+  },
+  "turn_start": {
+    "turn": {
+      "id": "019d464e-b80a-7f40-85d2-c1488522381e",
+      "items": [],
+      "status": "inProgress",
+      "error": null
+    }
+  },
+  "turn_completed": {
+    "threadId": "019d464e-b7f5-7b23-bb0c-78ee4108e77b",
+    "turn": {
+      "id": "019d464e-b80a-7f40-85d2-c1488522381e",
+      "items": [],
+      "status": "completed",
+      "error": null
+    }
+  },
+  "stop_reason": "stop",
+  "usage": {},
+  "total_cost_usd": 0.0
+}

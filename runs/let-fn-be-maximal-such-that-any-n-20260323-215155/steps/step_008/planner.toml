@@ -1,0 +1,30 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Determine the correct constant c for log f(n)/(log n)^2"
+description = """
+**Problem**: Let $f(n)$ = minimum number of convex-position subsets over all $n$-point sets in general position in $\mathbb{R}^2$. We want to determine $c = \lim \frac{\log_2 f(n)}{(\log_2 n)^2}$ (if it exists).
+
+**Known bounds**:
+- Lower bound: $c \geq 1/4$. Proof: By Suk's bound $ES(k) = 2^{k+o(k)}$, every $n$-point set has $\geq \binom{n}{j}/\binom{ES(j)}{j}$ convex $j$-subsets. With $\log_2 c_j \geq j\log_2 n - j^2 + o(j^2)$, optimized at $j = \frac{1}{2}\log_2 n$, giving $\frac{1}{4}(\log_2 n)^2$.
+
+- Upper bound: $c \leq 1$. The Erdős-Szekeres lower-bound construction gives $n$-point sets with max convex subset size $K \approx \log_2 n$, so $f(n) \leq \sum_{j=0}^K \binom{n}{j} = 2^{(1+o(1))(\log_2 n)^2}$.
+
+**Your task**: Determine the correct value of $c$. Specifically:
+
+1. **Can the lower bound be improved beyond 1/4?** Consider whether there are counting arguments beyond the simple averaging that give more convex subsets. For instance:
+   - Can we find many DISJOINT convex subsets whose unions are also convex?
+   - Does the downward-closed structure of convex subsets help (every subset of a convex set is convex)?
+   - Can the cups-caps partition structure give better bounds?
+
+2. **Can the upper bound be reduced below 1?** Analyze the Erdős-Szekeres recursive construction $P_k$ with $|P_k| = 2^{k-2}$ and no convex $(k+1)$-gon. This is built as $P_k = A \cup B$ where $A, B$ are copies of $P_{k-1}$. Let $F(k) = |\mathcal{C}(P_k)|$. Then $F(k) = 2F(k-1) + M(k) - 1$ where $M(k)$ counts mixed convex subsets. How large is $M(k)$? 
+   - If $M(k) \leq F(k-1)^{O(1)}$, then $\log F(k) = O(k)$, way below $k^2$.
+   - If $M(k) \approx 2^{ck^2}$, determine $c$.
+   
+3. **Key question about the ES construction**: In the ES lower-bound construction with $n = 2^{k-2}$ points and no $(k+1)$-gon, what is the number of convex $j$-subsets for $j \approx k/2$? Is it close to $\binom{n}{j}/\binom{ES(j)}{j} \approx 2^{k^2/4}$, or is it close to $\binom{n}{j} \approx 2^{k^2/2}$?
+
+4. Based on your analysis, state the value of $c$ (or tight bounds on it) and give a proof sketch for both the upper and lower bounds.
+
+**Important**: A "convex subset" means a subset of the point set that is in convex position (all points are vertices of their convex hull). The empty set, singletons, pairs, and triples (in general position) are always convex. The set $\mathcal{C}(P)$ of convex subsets is downward-closed: every subset of a convex set is convex.
+"""

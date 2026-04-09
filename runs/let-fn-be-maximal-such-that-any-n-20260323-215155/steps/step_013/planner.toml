@@ -1,0 +1,58 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Produce the final repo-ready upper-bound note with the normalization phrased correctly and recheck proof-tightness"
+description = """
+Focus only on polishing and rechecking the already-derived upper-bound note.
+
+Context:
+- We have an explicit recursive family $P_m$ of size $2^m$ with
+  $P_{m+1}=P_m^0\cup P_m^1$,
+  where $P_m^1$ lies to the right of $P_m^0$, every point of $P_m^1$ lies above every line through two points of $P_m^0$, and every point of $P_m^0$ lies below every line through two points of $P_m^1$.
+- The recurrence
+$$
+Q_+(r,P_{m+1})\le 2Q_+(r,P_m)+2^mQ_+(r-1,P_m),
+$$
+and the analogous one for $Q_-$, are accepted inputs.
+- A previous worker produced a full note proving
+$$
+g(P_m)\le 2^{m^2+m+O(\log m)}
+\quad\text{and}\quad
+f(n)\le 2^{(\log_2 n)^2+O(\log n)},
+$$
+and an independent verifier said the only remaining issue is the normalization sentence: it must be stated for each fixed level $m$ (or each finite initial segment up to $m$), not globally for all $P_m$ at once.
+
+Task:
+Produce the final polished note, with no new mathematics beyond that fix.
+
+Please do exactly this:
+1. Rewrite the note so the distinct-$x$ / generic-rotation normalization is stated correctly for each fixed target level $m$ (or finite initial segment up to $m$), preserving the recursive separation properties needed in the proof.
+2. Keep the proof self-contained and repo-ready.
+3. Include the definitions of $Q_\pm(r,P_m)$, $C_k(P_m)$, and $g(P_m)$.
+4. Keep the derivation of
+$$
+Q_\pm(r,P_m)\le d_r\,2^{rm},\qquad d_r=\prod_{j=2}^r(2^j-2)^{-1},
+$$
+the chain-pair injection
+$$
+C_k(P_m)\le \sum_{a=2}^k Q_+(a,P_m)Q_-(k+2-a,P_m),
+$$
+the bound
+$$
+C_k(P_m)\le (k-1)\,2^{(k+2)m-\lfloor (k+1)^2/4\rfloor},
+$$
+and the summed estimate
+$$
+g(P_m)\le 2^{m^2+m+O(\log m)}.
+$$
+5. Include the extension to arbitrary $n$ via taking an $n$-point subset of $P_{\lceil \log_2 n\rceil}$.
+6. End with a short explicit sentence identifying the flaw in the discarded $\alpha=2$ overclaim.
+7. Give the output in repo-item format:
+   first line `Summary: ...`
+   then the full note.
+
+Deliverable:
+- Final text ready to store directly as a repo item.
+- At the end, state clearly whether you see any remaining proof-tightness issues.
+"""

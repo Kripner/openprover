@@ -1,6 +1,10 @@
 """Shared utilities for LLM client modules."""
 
 import json
+import os
+import signal
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -9,14 +13,60 @@ class Interrupted(Exception):
     pass
 
 
+class QuotaExceeded(RuntimeError):
+    """Raised when the provider refuses a call due to quota/rate limits."""
+    pass
+
+
 class StreamingUnavailable(RuntimeError):
     """Raised when HF server cannot stream in current configuration."""
     pass
 
 
+def is_quota_exceeded_error(message: str) -> bool:
+    """Return True when an error message indicates quota/rate limiting."""
+    text = (message or "").lower()
+    phrases = (
+        "hit your limit",
+        "rate limit",
+        "rate-limit",
+        "rate_limit",
+        "quota exceeded",
+        "quota",
+        "too many requests",
+        "usage limit",
+    )
+    return any(phrase in text for phrase in phrases)
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Terminate a subprocess and any children it may have spawned."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return
+        except OSError:
+            pass
+    # On Unix, callers start CLI subprocesses with start_new_session=True so
+    # the child becomes its own process-group leader. That makes killpg(pid)
+    # terminate the full CLI tree instead of only the direct child process.
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (AttributeError, OSError, ProcessLookupError):
+        proc.kill()
+
+
 def archive(model, archive_dir, call_num, label, prompt, system_prompt,
             json_schema, response, error, elapsed_ms, archive_path=None,
-            *, thinking="", result_text=""):
+            *, thinking="", result_text="", provider="",
+            requested_model="", reasoning_effort=""):
     """Archive an LLM call to a readable markdown file + raw JSON sidecar."""
     if archive_path:
         path = archive_path
@@ -43,6 +93,12 @@ def archive(model, archive_dir, call_num, label, prompt, system_prompt,
         f"model: {model}",
         f"elapsed_ms: {elapsed_ms}",
     ]
+    if provider:
+        fm_lines.append(f"provider: {provider}")
+    if requested_model:
+        fm_lines.append(f"requested_model: {requested_model}")
+    if reasoning_effort:
+        fm_lines.append(f"reasoning_effort: {reasoning_effort}")
     if cost_usd:
         fm_lines.append(f"cost_usd: {cost_usd}")
     if input_tokens:

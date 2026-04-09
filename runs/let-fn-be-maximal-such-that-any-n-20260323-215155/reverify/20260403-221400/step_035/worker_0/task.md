@@ -1,0 +1,24 @@
+Use [[bounds/upper-bound-recursive-family]], [[status/recursive-family-information-loss]], and [[status/endpoint-matched-recursive-family]].
+
+Work on exactly one task: propose and analyze one specific alternative sparse construction family that is not the current balanced recursively separated family, with the sole goal of seeing whether it can plausibly lower the coefficient $1$ in the upper bound.
+
+Deliverable:
+1. Choose one concrete family only.
+   - Examples of acceptable directions: an unbalanced recursive split, a non-self-similar separated recursion, or another explicit geometric template.
+   - Do not survey multiple families.
+2. Define the family precisely enough that recursive counting can be attempted.
+3. Derive the first nontrivial counting recurrence or structural decomposition for convex subsets in that family.
+4. Decide one of:
+   - the family immediately reproduces the same top-scale obstruction,
+   - the family gives a genuinely different recurrence worth pursuing,
+   - or the family is too ill-posed and should be discarded.
+5. Output repo-ready markdown with a `Summary:` line.
+   - If promising, use a slug like `attempts/alternative-construction-<short-name>`.
+   - If it immediately fails, make the note a clean obstruction/diagnostic for that family.
+
+Requirements:
+- Stay constructive and focused on one family.
+- Do not revisit endpoint-matching refinements inside the old balanced family.
+- Do not use literature or Lean.
+- Be explicit about exact identities versus inequalities.
+- The note should make clear why this is the next fork after [[status/endpoint-matched-recursive-family]].

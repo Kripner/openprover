@@ -1,0 +1,50 @@
+Use [[lemmas/ternary-one-split-structure]], [[attempts/alternative-construction-balanced-ternary-split]], and [[attempts/balanced-ternary-bridge-conjugation-expansion]].
+
+Work on exactly one task: pick a very simple explicit balanced ternary separated template and recompute the bridge conjugates correctly from scratch, enough to decide whether the currently tracked bridge state closes or already fails at first expansion.
+
+Context already established:
+- The ternary local geometry is verified.
+- The total count decomposition into one-child, two-child, and bridge-weighted three-child terms is exact.
+- The abstract bridge expansion
+$$
+H_n^\pm[\alpha,\beta](\Phi_i(x'),\Phi_j(y'))
+=
+\sum_{k\in\{L,M,R\}}
+H_{n-1}^\pm[\Phi_k^{-1}\alpha\Phi_i,\Phi_k^{-1}\beta\Phi_j](x',y')
+$$
+is exact.
+- The previous concrete obstruction attempt is invalid because the first-generation conjugates were computed incorrectly.
+
+What to do:
+1. Choose an explicit convenient balanced ternary template.
+   - Prefer the simplest possible one, e.g. a common small homothety plus three asymmetric translation vectors, if that still satisfies the separated-position hypotheses.
+   - Verify the separated-position hypotheses for your template.
+2. Compute correctly
+$$
+\alpha_0=\Phi_M^{-1}\Phi_L,\qquad \beta_0=\Phi_M^{-1}\Phi_R,
+$$
+then compute the first-generation conjugates
+$$
+\Phi_k^{-1}\alpha_0\Phi_i,\qquad \Phi_k^{-1}\beta_0\Phi_j
+$$
+for the instances you need to decide closure.
+   - Derive the correct general formula first.
+   - Check decisive instances explicitly, including at least the $i=j=k=M$ instance.
+   - If useful, summarize the whole first-generation family compactly.
+3. Decide exactly one of the following:
+   - the first-generation pairs collapse to a finite clean family that yields an exact closed enlarged-state recursion; state that family and the exact closure;
+   - or at least one genuinely new required pair appears already at first expansion and is not one of the currently tracked bridge types, nor identified by an actual symmetry of the chosen template; state that as the first exact obstruction.
+4. If you claim obstruction, make the conclusion precise:
+   - identify the concrete new pair(s);
+   - explain why the currently tracked state only covers the standard bridge pair(s);
+   - explain why the new pair is not removed by template symmetry.
+5. Keep exact identities separate from inequalities.
+6. Output repo-ready markdown with a `Summary:` line.
+   - If closure works, suitable slug: `status/balanced-ternary-recursion-closure`.
+   - If obstruction is proved, suitable slug: `status/balanced-ternary-concrete-bridge-obstruction`.
+7. If the corrected computation still does not suffice to prove obstruction, say exactly what weaker statement is established instead; do not overclaim.
+
+Requirements:
+- Focus only on the corrected concrete conjugacy/closure question.
+- Do not revisit asymptotics, binary variants, or nonrecursive constructions.
+- A clean explicit affine computation is preferred over discussion.

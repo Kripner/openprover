@@ -1,0 +1,24 @@
+timestamp = "2026-03-25T23:49:31.204806+00:00"
+step = 37
+status = "ok"
+action = "spawn"
+
+[planner]
+cost_usd = 0.0
+duration_ms = 125422
+input_tokens = 32417
+output_tokens = 6021
+cache_creation_tokens = 0
+cache_read_tokens = 9344
+model = "gpt-5.4"
+stop_reason = "completed"
+
+[[workers]]
+index = 0
+cost_usd = 0.0
+duration_ms = 0
+input_tokens = 0
+output_tokens = 0
+cache_creation_tokens = 0
+cache_read_tokens = 0
+error = "{"type": "error", "message": "Reconnecting... 2/5 (stream disconnected before completion: idle timeout waiting for websocket)"}"

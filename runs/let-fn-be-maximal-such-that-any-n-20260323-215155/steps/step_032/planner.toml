@@ -1,0 +1,28 @@
+action = "spawn"
+summary = ""
+
+[[tasks]]
+summary = "Write the repaired recursive-family information-loss note using the corrected one-split convention"
+description = """
+Use [[lemmas/one-split-fixed-state-recurrence]], [[lemmas/one-split-crossing-cup-cap-identities]], [[lemmas/one-split-structure-spanning-convex-subsets]], and [[bounds/upper-bound-recursive-family]].
+
+Work on exactly one task: produce the final repo-ready note for `status/recursive-family-information-loss` now that the one-split convention has been repaired.
+
+Deliverable:
+- Write a short polished markdown item with a `Summary:` line.
+- State the exact fixed-state identity and the exact fixed-split-size identity.
+- Explicitly derive the exact crossing passage from the corrected convention:
+  - the spanning-cup identity obtained from the $b=1$ specialization;
+  - the spanning-cap identity obtained from the $a=1$ specialization;
+  - explain why these are exact sums over the remaining endpoint parameter, with no inequality.
+- Then identify the first inequality in [[bounds/upper-bound-recursive-family]] that actually forgets matched outer endpoints $(\ell,r)$.
+- Distinguish that endpoint-forgetting step from earlier auxiliary inequalities used only to bound total cup/cap counts.
+- State briefly whether restoring endpoint matching alone would explain or improve the exponent constant $1$, and why.
+
+Requirements:
+- Be fully self-contained relative to the cited items.
+- Be explicit about which displayed formulas are exact identities and which are inequalities.
+- Do not do new asymptotic optimization, literature, Lean, or any new proof strategy beyond this diagnosis.
+- Output should be ready for direct storage as `status/recursive-family-information-loss`.
+
+"""

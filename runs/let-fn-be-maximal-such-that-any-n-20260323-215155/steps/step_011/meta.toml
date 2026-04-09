@@ -1,0 +1,23 @@
+timestamp = "2026-03-25T00:16:26.810860+00:00"
+step = 11
+status = "ok"
+action = "spawn"
+
+[planner]
+cost_usd = 0.0
+duration_ms = 60119
+input_tokens = 23572
+output_tokens = 3160
+cache_creation_tokens = 0
+cache_read_tokens = 9344
+model = "gpt-5.4"
+stop_reason = "completed"
+
+[[workers]]
+index = 0
+cost_usd = 0.0
+duration_ms = 264312
+input_tokens = 79364
+output_tokens = 14056
+cache_creation_tokens = 0
+cache_read_tokens = 74880

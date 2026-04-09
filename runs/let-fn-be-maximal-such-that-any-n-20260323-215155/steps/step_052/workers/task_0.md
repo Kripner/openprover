@@ -1,0 +1,35 @@
+Focus only on the lower-bound side, and only on the classical Erdős-Szekeres cups/caps mechanism.
+
+Context:
+- Verified lower bound: [[bounds/lower-bound-averaging]].
+- Averaging-based upgrades are closed barriers:
+  [[status/multi-k-averaging-barrier]],
+  [[status/multiplicity-aware-averaging-barrier]],
+  [[status/m-subset-total-count-bootstrapping-barrier]].
+- So the next lower-bound test must stay genuinely non-averaging.
+- A first cups/caps-state attempt failed because it used the wrong state:
+  if one defines $u_i,v_i$ as the longest cup and cap lengths both ending at $p_i$, the states need not be distinct.
+  Explicit counterexample: in $x$-order
+  $$(1,0),(2,3),(3,1),(4,4),(5,5),$$
+  the resulting states are
+  $$(u_i,v_i)=(1,1),(2,2),(2,3),(3,3),(3,3).$$
+  See [[attempts/cups-caps-naive-state-noninjective]].
+
+Task:
+Use the genuinely injective state/labelling from the classical Erdős-Szekeres cups/caps proof (or a standard equivalent classical state, but you must define it explicitly and prove the injectivity you use). Then determine what this corrected state-counting mechanism can actually force about the number of convex subsets.
+
+What I need:
+1. A correct injective classical state formulation.
+2. A concrete counting mechanism that turns that state data into a lower bound on convex subsets.
+3. Either:
+   - a genuine lower-bound improvement beyond the current averaging output, or
+   - a precise barrier statement for this corrected classical-state mechanism, with the exact place where multiplicity/information is lost.
+4. Repo-item-ready markdown if successful.
+
+Requirements:
+- Keep it self-contained.
+- Stay within this one mechanism only.
+- No averaging over subset sizes or over $m$-subsets.
+- No upper-bound constructions.
+- No literature/web.
+- Do not reuse the false state from [[attempts/cups-caps-naive-state-noninjective]].

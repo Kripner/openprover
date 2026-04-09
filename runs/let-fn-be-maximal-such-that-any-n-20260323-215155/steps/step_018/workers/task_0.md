@@ -1,0 +1,34 @@
+Work only on the recursive construction from [[bounds/upper-bound-recursive-family]].
+
+Context you should use:
+- $P_1$ is a two-point set, and for $m\ge 2$, $P_m=L_m\sqcup R_m$ where $L_m,R_m$ are affine copies of $P_{m-1}$ in the standard recursively separated position, so $|P_m|=2^m$.
+- The current rigorous upper bound is obtained from the coarse injection
+  $$
+  C_k(P_m)\le \sum_{a=2}^k Q_+(a,P_m)\,Q_-(k+2-a,P_m),
+  $$
+  together with cup/cap bounds, giving
+  $$
+  f(n)\le 2^{(\log_2 n)^2+O(\log n)}.
+  $$
+- The discarded stronger route failed because total cup/cap counts forget the requirement that the upper and lower hull chains of a convex $k$-set must share the same leftmost and rightmost endpoints.
+
+Your task is one focused question:
+Formulate and analyze an endpoint-sensitive counting scheme for convex subsets of $P_m$ that keeps track of common endpoints across the recursive split.
+
+Concrete deliverable:
+- Define a workable endpoint-refined quantity (or small family of quantities) that counts convex-chain data with shared endpoints.
+- Derive the cleanest rigorous recurrence you can for these quantities under $P_m=L_m\sqcup R_m$.
+- Use that recurrence to bound the total number of convex $k$-subsets if possible.
+- If you can improve the exponent constant below $1$, give the argument cleanly.
+- If you cannot improve it, stop at the first real obstruction and explain exactly where the endpoint-sensitive recurrence still loses too much.
+
+Requirements:
+1. Stay entirely on the construction side; do not use literature or heuristic guesses.
+2. Keep the task narrow: endpoint-aware counting in the existing recursive family only.
+3. Return either:
+   - a rigorous improved upper-bound argument, or
+   - a rigorous partial lemma/recurrence plus a clear obstruction.
+4. Be explicit about what quantities are being counted and why they respect endpoint matching.
+5. Do not write Lean.
+
+Return a self-contained note suitable to store as either a lemma item or a failed-attempt item, depending on outcome.
