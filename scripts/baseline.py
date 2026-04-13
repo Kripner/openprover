@@ -27,9 +27,10 @@ logger = logging.getLogger("baseline")
 MISTRAL_MODEL_MAP = {"leanstral": "labs-leanstral-2603"}
 CLAUDE_MODELS = {"sonnet", "opus"}
 
-# Match ```lean ... ``` (or ```lean4 ... ```) markdown code fences.
+# Match ```lean ... ```, ```lean4 ... ```, or ```tactics ... ``` code fences.
+# Leanstral sometimes uses ```tactics instead of ```lean.
 LEAN_FENCE_RE = re.compile(
-    r"```lean[0-9]*\s*\n(.*?)\n```",
+    r"```(?:lean[0-9]*|tactics)\s*\n(.*?)\n```",
     re.DOTALL | re.IGNORECASE,
 )
 
