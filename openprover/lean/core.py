@@ -133,52 +133,72 @@ class LeanTheorem:
 
 
 def run_lean_check(lean_file: Path, project_dir: Path,
-                   timeout: int = 300) -> tuple[bool, str, str]:
+                   timeout: int = 300,
+                   max_memory_mb: int = 4096) -> tuple[bool, str, str]:
     """Run ``lake env lean <file>`` and return (success, feedback, cmd_info).
 
     Success means returncode 0 and empty stdout.
     cmd_info is a human-readable string with the exact command and cwd.
+    max_memory_mb is passed to Lean's ``-M`` flag to cap memory usage
+    and prevent OOM on memory-constrained machines.  The child runs in
+    its own process group so timeout kills lake + lean together.
     """
-    cmd = ["lake", "env", "lean", str(lean_file.resolve())]
+    import os as _os
+    import signal as _signal
+
+    cmd = [
+        "lake", "env", "lean",
+        f"-M{max_memory_mb}",
+        str(lean_file.resolve()),
+    ]
     cwd = str(project_dir)
     cmd_info = f"cwd: {cwd}\ncmd: {' '.join(cmd)}"
     logger.info("Verifying %s", lean_file.name)
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=cwd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            start_new_session=True,
         )
-        stdout = proc.stdout.strip()
-        stderr = proc.stderr.strip()
-
-        if proc.returncode == 0 and not stdout:
-            logger.info("Lean check passed: %s", lean_file.name)
-            return (True, "", cmd_info)
-
-        parts = []
-        if stdout:
-            parts.append(stdout)
-        if stderr:
-            parts.append(stderr)
-        feedback = '\n'.join(parts)
-        # Strip the full file path prefix from each diagnostic line
-        file_prefix = str(lean_file.resolve()) + ":"
-        feedback = '\n'.join(
-            line[len(file_prefix):] if line.startswith(file_prefix) else line
-            for line in feedback.splitlines()
-        )
-        logger.info("Lean check failed: %s", lean_file.name)
-        return (False, feedback, cmd_info)
-
-    except subprocess.TimeoutExpired:
-        logger.warning("Lean verification timed out: %s (%ds)", lean_file.name, timeout)
-        return (False, f"Lean verification timed out after {timeout}s", cmd_info)
     except FileNotFoundError:
         logger.error("lake command not found")
         return (False, "lake command not found - is Lean/Lake installed and on PATH?", cmd_info)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Kill the entire process group (lake + lean children).
+        try:
+            _os.killpg(proc.pid, _signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        proc.wait()
+        logger.warning("Lean verification timed out: %s (%ds)", lean_file.name, timeout)
+        return (False, f"Lean verification timed out after {timeout}s", cmd_info)
+
+    stdout = stdout.strip()
+    stderr = stderr.strip()
+
+    if proc.returncode == 0 and not stdout:
+        logger.info("Lean check passed: %s", lean_file.name)
+        return (True, "", cmd_info)
+
+    parts = []
+    if stdout:
+        parts.append(stdout)
+    if stderr:
+        parts.append(stderr)
+    feedback = '\n'.join(parts)
+    # Strip the full file path prefix from each diagnostic line
+    file_prefix = str(lean_file.resolve()) + ":"
+    feedback = '\n'.join(
+        line[len(file_prefix):] if line.startswith(file_prefix) else line
+        for line in feedback.splitlines()
+    )
+    logger.info("Lean check failed: %s", lean_file.name)
+    return (False, feedback, cmd_info)
 
 
 def merge_lean_imports(existing: str, new_snippet: str) -> str:
