@@ -83,7 +83,10 @@ def _reindent(replacement: str, column: int) -> str:
 def _verify(code: str, work_dir: LeanWorkDir, project_dir: Path) -> tuple[bool, str]:
     """Run lean_verify and return (success, feedback)."""
     path = work_dir.make_file("baseline_verify", code)
-    success, feedback, _ = run_lean_check(path, project_dir)
+    try:
+        success, feedback, _ = run_lean_check(path, project_dir)
+    finally:
+        path.unlink(missing_ok=True)
     if success:
         return True, "OK"
     if "sorry" in feedback.lower() and not lean_has_errors(feedback):
@@ -265,8 +268,12 @@ def run_baseline(
         num_sorries=parsed.num_sorries,
     )
 
-    # Conversation as a single accumulated user prompt (we restart the
-    # context each turn — no tool/function machinery, no API state).
+    # For Mistral models we use the Conversations API's server-side
+    # context (conversation_id) so we only send the NEW user message
+    # each turn — avoids quadratic memory/disk growth.  For Claude we
+    # still accumulate the full transcript client-side.
+    use_conv_id = getattr(client, "mistral", False)
+    conversation_id: str | None = None
     transcript: list[str] = [initial_user]
     log_lines: list[str] = []
     turns = 0
@@ -314,20 +321,37 @@ def run_baseline(
                 break
 
             turns += 1
-            prompt = "\n\n".join(transcript)
+
+            # With conversation_id the server keeps context — only send
+            # the latest user feedback.  Without it, join the full
+            # transcript into one prompt (Claude path).
+            if use_conv_id and conversation_id is not None:
+                prompt = transcript[-1]   # just the new feedback
+            else:
+                prompt = "\n\n".join(transcript)
+
+            call_kwargs: dict = dict(
+                prompt=prompt,
+                system_prompt=SYSTEM_PROMPT,
+                label=f"baseline-{name}-t{turns}",
+            )
+            if use_conv_id and conversation_id is not None:
+                call_kwargs["conversation_id"] = conversation_id
 
             if stream:
                 print(f"\n  ─── turn {turns} ───", flush=True)
-                resp = client.call(prompt=prompt, system_prompt=SYSTEM_PROMPT,
-                                   stream_callback=stream_cb,
-                                   label=f"baseline-{name}-t{turns}")
+                resp = client.call(**call_kwargs, stream_callback=stream_cb)
                 if state["in_thinking"]:
                     sys.stdout.write(reset)
                     state["in_thinking"] = False
                 print(flush=True)
             else:
-                resp = client.call(prompt=prompt, system_prompt=SYSTEM_PROMPT,
-                                   label=f"baseline-{name}-t{turns}")
+                resp = client.call(**call_kwargs)
+
+            # Capture conversation_id from the first response so
+            # subsequent turns continue the same server-side context.
+            if use_conv_id and conversation_id is None:
+                conversation_id = resp.get("conversation_id")
 
             assistant_text = resp.get("result", "") or ""
             thinking_text = resp.get("thinking", "") or ""
@@ -384,14 +408,21 @@ def run_baseline(
                     f"got {len(blocks)}."
                 )
                 _flush_turn()
-                transcript.append(
-                    f"# Assistant turn {turns}\n{assistant_text}\n\n"
-                    f"# User\nExpected {parsed.num_sorries} ```lean ... ``` "
+                feedback_msg = (
+                    f"Expected {parsed.num_sorries} ```lean ... ``` "
                     f"code fence(s) (one per `sorry`), got {len(blocks)}. "
                     "Output exactly the right number of fenced blocks, in "
                     "order, each containing only the proof body that "
                     "replaces the corresponding `sorry`."
                 )
+                if use_conv_id:
+                    # Server has the assistant reply; just queue feedback.
+                    transcript.append(feedback_msg)
+                else:
+                    transcript.append(
+                        f"# Assistant turn {turns}\n{assistant_text}\n\n"
+                        f"# User\n{feedback_msg}"
+                    )
                 continue
 
             # Re-indent each replacement so multi-line proof bodies sit
@@ -412,12 +443,18 @@ def run_baseline(
                 turn_outcome["outcome"] = "rejected"
                 turn_outcome["feedback"] = str(e)
                 _flush_turn()
-                transcript.append(
-                    f"# Assistant turn {turns}\n{assistant_text}\n\n"
-                    f"# User\nYour proof block was rejected: {e}. "
+                feedback_msg = (
+                    f"Your proof block was rejected: {e}. "
                     "Output a fresh ```lean ... ``` block containing only "
                     "the proof body."
                 )
+                if use_conv_id:
+                    transcript.append(feedback_msg)
+                else:
+                    transcript.append(
+                        f"# Assistant turn {turns}\n{assistant_text}\n\n"
+                        f"# User\n{feedback_msg}"
+                    )
                 continue
 
             verifications += 1
@@ -460,12 +497,18 @@ def run_baseline(
                 for line in preview.splitlines():
                     print(f"  │ {line}", flush=True)
 
-            transcript.append(
-                f"# Assistant turn {turns}\n{assistant_text}\n\n"
-                f"# User\nlean_verify failed:\n```\n{feedback}\n```\n"
+            feedback_msg = (
+                f"lean_verify failed:\n```\n{feedback}\n```\n"
                 "Try again. Output the full Lean source inside a "
                 "```lean ... ``` code fence."
             )
+            if use_conv_id:
+                transcript.append(feedback_msg)
+            else:
+                transcript.append(
+                    f"# Assistant turn {turns}\n{assistant_text}\n\n"
+                    f"# User\n{feedback_msg}"
+                )
 
     except Exception as e:
         elapsed = time.monotonic() - start

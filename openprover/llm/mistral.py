@@ -188,11 +188,17 @@ class MistralClient:
         tool_start_callback=None,
         max_tokens: int | None = None,
         no_thinking: bool = False,
+        conversation_id: str | None = None,
     ) -> dict:
         """Single-turn call. Same interface as LLMClient.call().
 
         tool_callback and tool_start_callback are accepted for interface
         compatibility but ignored (Mistral tool calling uses chat()).
+
+        When conversation_id is provided, continues an existing Mistral
+        conversation — only the new user prompt is sent (the server
+        retains prior context).  This avoids re-sending the full
+        transcript every turn and keeps memory/disk usage constant.
         """
         self.call_count += 1
         call_num = self.call_count
@@ -200,8 +206,9 @@ class MistralClient:
         self._archive(call_num, label, prompt, system_prompt, json_schema,
                       None, None, 0, archive_path)
 
-        logger.info("[%s] calling %s%s", label, self.model,
-                    " (streaming)" if stream_callback else "")
+        logger.info("[%s] calling %s%s conv=%s", label, self.model,
+                    " (streaming)" if stream_callback else "",
+                    conversation_id or "(new)")
 
         payload = self._build_payload(
             inputs=[{"role": "user", "content": prompt}],
@@ -209,6 +216,7 @@ class MistralClient:
             max_tokens=max_tokens,
             stream=bool(stream_callback),
             no_thinking=no_thinking,
+            continuation=bool(conversation_id),
         )
         start = time.time()
 
@@ -222,11 +230,13 @@ class MistralClient:
                 return self._stream(
                     payload, call_num, label, start, stream_callback, archive_path,
                     prompt=prompt, system_prompt=system_prompt, json_schema=json_schema,
+                    conversation_id=conversation_id,
                 )
             else:
                 return self._non_streaming(
                     payload, call_num, label, start, archive_path,
                     prompt=prompt, system_prompt=system_prompt, json_schema=json_schema,
+                    conversation_id=conversation_id,
                 )
         except (urllib.error.URLError, ConnectionError) as e:
             elapsed_ms = int((time.time() - start) * 1000)
