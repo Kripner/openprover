@@ -151,31 +151,34 @@ class MistralClient:
                 "Authorization": f"Bearer {self._api_key}",
             },
         )
-        # Retry transient failures with exponential backoff:
-        # 5xx (server errors), 409 (conversation busy), 429 (rate limit),
-        # and connection resets.  Other 4xx are surfaced immediately.
+        # Retry transient failures indefinitely with exponential backoff
+        # up to 120s: 5xx (server errors), 409 (conversation busy),
+        # 429 (rate limit), and connection resets.  Other 4xx are
+        # surfaced immediately.
         RETRYABLE_CODES = {409, 429}
-        delays = [2, 5, 15, 30, 60]
-        for attempt, delay in enumerate([0] + delays):
-            if delay:
+        delays = [2, 5, 15, 30, 60, 120]  # then repeat 120s forever
+        attempt = 0
+        while True:
+            if attempt > 0:
+                delay = delays[min(attempt - 1, len(delays) - 1)]
                 if self._interrupted.is_set():
                     raise Interrupted()
                 logger.warning(
-                    "mistral request failed, retrying in %ds (attempt %d/%d)",
-                    delay, attempt, len(delays))
+                    "mistral request failed, retrying in %ds (attempt %d)",
+                    delay, attempt)
                 time.sleep(delay)
             try:
                 return urllib.request.urlopen(req, timeout=timeout)
             except urllib.error.HTTPError as e:
                 retryable = (500 <= e.code < 600) or e.code in RETRYABLE_CODES
-                if retryable and attempt < len(delays):
+                if retryable:
+                    attempt += 1
                     continue
                 raise
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-                if attempt < len(delays):
-                    logger.warning("mistral connection error: %s", e)
-                    continue
-                raise
+                logger.warning("mistral connection error: %s", e)
+                attempt += 1
+                continue
 
     # ── call() ───────────────────────────────────────────────────────
 
