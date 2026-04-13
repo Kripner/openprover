@@ -151,8 +151,10 @@ class MistralClient:
                 "Authorization": f"Bearer {self._api_key}",
             },
         )
-        # Retry transient upstream failures (5xx + connection resets) with
-        # exponential backoff. 4xx errors are surfaced immediately.
+        # Retry transient failures with exponential backoff:
+        # 5xx (server errors), 409 (conversation busy), 429 (rate limit),
+        # and connection resets.  Other 4xx are surfaced immediately.
+        RETRYABLE_CODES = {409, 429}
         delays = [2, 5, 15, 30, 60]
         for attempt, delay in enumerate([0] + delays):
             if delay:
@@ -165,7 +167,8 @@ class MistralClient:
             try:
                 return urllib.request.urlopen(req, timeout=timeout)
             except urllib.error.HTTPError as e:
-                if 500 <= e.code < 600 and attempt < len(delays):
+                retryable = (500 <= e.code < 600) or e.code in RETRYABLE_CODES
+                if retryable and attempt < len(delays):
                     continue
                 raise
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
