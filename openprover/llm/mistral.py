@@ -99,6 +99,7 @@ class MistralClient:
     """Calls the Mistral Conversations API and archives interactions."""
 
     context_length = 256_000
+    max_completion_tokens = 32_000  # API hard cap per response
     mistral = True  # Used by prover for tool-routing dispatch
 
     def __init__(self, model: str, archive_dir: Path, answer_reserve: int = 4096):
@@ -371,9 +372,8 @@ class MistralClient:
             effective_max = self.max_output_tokens
         else:
             # Thinking enabled: thinking + output share the max_tokens budget.
-            # Use the full context length so thinking doesn't crowd out output.
-            # The API caps at (context_length - prompt_tokens) automatically.
-            effective_max = self.context_length
+            # Cap at the API's per-response ceiling (32K for leanstral).
+            effective_max = self.max_completion_tokens
         if continuation:
             # Continuation of existing conversation: only inputs,
             # stream, and completion_args.  model/tools/instructions
