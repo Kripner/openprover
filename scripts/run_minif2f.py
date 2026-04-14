@@ -116,7 +116,7 @@ def _run_openprover(
             "--theorem", theorem_path,
             "--model", args.model,
             "--headless",
-            "-P", str(args.parallelism),
+            "-P", str(args.max_workers),
         ]
         if args.max_tokens:
             cmd.extend(["--max-tokens", str(args.max_tokens)])
@@ -259,7 +259,7 @@ def _run_all(
     model_label = planner if planner == worker else f"{planner}/{worker}"
     mode = "informal" if args.informal or lean_project is None else "formal"
     print(f"  MiniF2F {args.split}: {total} problems, method={args.method},"
-          f" parallelism={args.problem_parallelism},"
+          f" parallelism={args.parallelism},"
           f" model={model_label}, mode={mode}")
     if carried:
         print(f"  Resumed: {len(carried)} carried over, {len(problems)} to run")
@@ -276,7 +276,7 @@ def _run_all(
         print(f"  Saved to {bench_dir / 'results.json'}")
         return
 
-    with ThreadPoolExecutor(max_workers=args.problem_parallelism) as pool:
+    with ThreadPoolExecutor(max_workers=args.parallelism) as pool:
         futures = {
             pool.submit(runner, name, info, lean_project, bench_dir, args): name
             for name, info in problems.items()
@@ -296,7 +296,7 @@ def _run_all(
             else:
                 errors += 1
 
-            running = min(args.problem_parallelism, total - completed)
+            running = min(args.parallelism, total - completed)
             elapsed_str = _format_time(entry["elapsed"])
             counts = f"P:{proved} F:{not_proved} E:{errors}"
             if running > 0:
@@ -394,15 +394,10 @@ def main():
                         help="Limit number of problems")
     parser.add_argument("--skip", type=int, default=0,
                         help="Skip first N problems (resume interrupted runs)")
-    parser.add_argument("--parallelism", "--problem-parallelism",
-                        dest="problem_parallelism",
-                        type=int, default=1,
-                        help="Concurrent problem instances (default: 1). "
-                             "--problem-parallelism is kept as an alias.")
-    parser.add_argument("-P", "--worker-parallelism",
-                        dest="parallelism",
-                        type=int, default=1,
-                        help="Parallel workers per openprover step "
+    parser.add_argument("--parallelism", type=int, default=1,
+                        help="Concurrent problem instances (default: 1)")
+    parser.add_argument("-P", "--max-workers", type=int, default=1,
+                        help="Max parallel workers per openprover step "
                              "(default: 1). Only used with --method openprover.")
 
     model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral"]
@@ -545,7 +540,7 @@ def main():
         "max_time": args.max_time,
         "max_tokens": args.max_tokens,
         "parallelism": args.parallelism,
-        "problem_parallelism": args.problem_parallelism,
+        "max_workers": args.max_workers,
         "informal": args.informal,
         "repo_path": str(args.repo_path) if args.repo_path else None,
         "total_problems": len(carried) + len(problems),

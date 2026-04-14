@@ -27,7 +27,7 @@ def _cli_flag_given(*flags: str) -> bool:
 def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
                      budget_mode: str, budget_limit: int,
                      conclude_after: float,
-                     parallelism: int,
+                     max_workers: int,
                      isolation: bool, autonomous: bool, mode: str,
                      lean_project_dir: Path | None, lean_items: bool,
                      lean_worker_tools: bool, provider_url: str,
@@ -40,7 +40,7 @@ def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
         f'budget_mode = "{budget_mode}"',
         f'budget_limit = {budget_limit}',
         f'conclude_after = {conclude_after}',
-        f'parallelism = {parallelism}',
+        f'max_workers = {max_workers}',
         f'isolation = {str(isolation).lower()}',
         f'autonomous = {str(autonomous).lower()}',
         f'mode = "{mode}"',
@@ -242,7 +242,7 @@ def _cmd_prove():
     parser.add_argument("--autonomous", action="store_true", help="Start in autonomous mode (default: interactive)")
     parser.add_argument("--read-only", action="store_true", help="Inspect run without resuming")
     parser.add_argument("--isolation", action=argparse.BooleanOptionalAction, default=True, help="Disable web searches (no literature_search action)")
-    parser.add_argument("-P", "--parallelism", type=int, default=1, help="Max parallel workers per spawn step (default: 1)")
+    parser.add_argument("-P", "--max-workers", type=int, default=1, help="Max parallel workers per spawn step (default: 1)")
     parser.add_argument("--answer-reserve", type=int, default=4096, metavar="TOKENS", help="Tokens reserved for answer after thinking (default: 4096)")
     parser.add_argument("--history-budget", type=int, default=0, metavar="CHARS", help="Char budget for planner history (default: auto from model context)")
     parser.add_argument("--effort", choices=["low", "medium", "high", "max"], default=None,
@@ -326,8 +326,8 @@ def _cmd_prove():
                 args._saved_budget_limit = saved.get("budget_limit", 3600)
             if not _cli_flag_given("--conclude-after"):
                 args.conclude_after = saved.get("conclude_after", args.conclude_after)
-            if not _cli_flag_given("-P", "--parallelism"):
-                args.parallelism = saved.get("parallelism", args.parallelism)
+            if not _cli_flag_given("-P", "--max-workers"):
+                args.max_workers = saved.get("max_workers", args.max_workers)
             if not _cli_flag_given("--isolation", "--no-isolation"):
                 args.isolation = saved.get("isolation", args.isolation)
             if not _cli_flag_given("--autonomous"):
@@ -482,7 +482,7 @@ def _cmd_prove():
             budget_mode=budget_mode,
             budget_limit=budget_limit,
             conclude_after=args.conclude_after,
-            parallelism=args.parallelism,
+            max_workers=args.max_workers,
             isolation=args.isolation,
             autonomous=args.autonomous,
             mode=mode,
@@ -505,7 +505,7 @@ def _cmd_prove():
         verbose=args.verbose,
         tui=tui,
         isolation=args.isolation,
-        parallelism=args.parallelism,
+        max_workers=args.max_workers,
         lean_project_dir=args.lean_project,
         lean_theorem_text=lean_theorem_text,
         proof_md_text=proof_md_text,
