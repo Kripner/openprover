@@ -326,9 +326,12 @@ def _run_all(
 # ── Resume helpers ───────────────────────────────────────────────────
 
 # Config keys carried forward when resuming a previous benchmark.
+# Parallelism is intentionally excluded: it's a runtime/resource concern
+# (doesn't affect which problems run or how they're evaluated), so users
+# can tune it per-resume without triggering the conflict check.
 _RESUME_CARRY_KEYS = (
     "method", "split", "model", "planner_model", "worker_model",
-    "max_time", "max_tokens", "parallelism", "problem_parallelism",
+    "max_time", "max_tokens",
     "informal", "skip", "limit", "repo_path",
 )
 # Keys that need to be coerced back to Path on load (config.json stores strings).
@@ -391,10 +394,16 @@ def main():
                         help="Limit number of problems")
     parser.add_argument("--skip", type=int, default=0,
                         help="Skip first N problems (resume interrupted runs)")
-    parser.add_argument("--problem-parallelism", type=int, default=1,
-                        help="Concurrent problem instances (default: 1)")
-    parser.add_argument("-P", "--parallelism", type=int, default=1,
-                        help="Parallel workers per openprover step (default: 1)")
+    parser.add_argument("--parallelism", "--problem-parallelism",
+                        dest="problem_parallelism",
+                        type=int, default=1,
+                        help="Concurrent problem instances (default: 1). "
+                             "--problem-parallelism is kept as an alias.")
+    parser.add_argument("-P", "--worker-parallelism",
+                        dest="parallelism",
+                        type=int, default=1,
+                        help="Parallel workers per openprover step "
+                             "(default: 1). Only used with --method openprover.")
 
     model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral"]
     parser.add_argument("--model", default="sonnet", choices=model_choices)
