@@ -134,7 +134,7 @@ class LeanTheorem:
 
 def run_lean_check(lean_file: Path, project_dir: Path,
                    timeout: int = 300,
-                   max_memory_mb: int = 4096) -> tuple[bool, str, str]:
+                   max_memory_mb: int = 16384) -> tuple[bool, str, str]:
     """Run ``lake env lean <file>`` and return (success, feedback, cmd_info).
 
     Success means returncode 0 and empty stdout.
