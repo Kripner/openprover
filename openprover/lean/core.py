@@ -132,6 +132,23 @@ class LeanTheorem:
         return result
 
 
+def _lean_preexec(max_memory_mb: int):
+    """preexec_fn: start new session (so timeout kills lake+lean as a
+    group) and cap address space so a runaway proof can't OOM the host.
+
+    We can't use lean's ``-M`` flag here: it gets reinterpreted as a
+    ``-D`` config option when LEAN_PATH is set (as ``lake env`` does),
+    which makes lean reject it as 'unknown configuration option'.
+    """
+    import os as _os
+    import resource as _resource
+    max_bytes = max_memory_mb * 1024 * 1024
+    def _setup():
+        _os.setsid()
+        _resource.setrlimit(_resource.RLIMIT_AS, (max_bytes, max_bytes))
+    return _setup
+
+
 def run_lean_check(lean_file: Path, project_dir: Path,
                    timeout: int = 300,
                    max_memory_mb: int = 16384) -> tuple[bool, str, str]:
@@ -139,18 +156,13 @@ def run_lean_check(lean_file: Path, project_dir: Path,
 
     Success means returncode 0 and empty stdout.
     cmd_info is a human-readable string with the exact command and cwd.
-    max_memory_mb is passed to Lean's ``-M`` flag to cap memory usage
-    and prevent OOM on memory-constrained machines.  The child runs in
-    its own process group so timeout kills lake + lean together.
+    max_memory_mb caps the lean process's address space (RLIMIT_AS) to
+    prevent OOM on memory-constrained machines / high parallelism.
     """
     import os as _os
     import signal as _signal
 
-    cmd = [
-        "lake", "env", "lean",
-        f"-M{max_memory_mb}",
-        str(lean_file.resolve()),
-    ]
+    cmd = ["lake", "env", "lean", str(lean_file.resolve())]
     cwd = str(project_dir)
     cmd_info = f"cwd: {cwd}\ncmd: {' '.join(cmd)}"
     logger.info("Verifying %s", lean_file.name)
@@ -161,7 +173,7 @@ def run_lean_check(lean_file: Path, project_dir: Path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=True,
+            preexec_fn=_lean_preexec(max_memory_mb),
         )
     except FileNotFoundError:
         logger.error("lake command not found")
