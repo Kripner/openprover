@@ -2,6 +2,7 @@
 
 import argparse
 import atexit
+import os
 import re
 import signal
 import sys
@@ -228,7 +229,7 @@ def _cmd_prove():
         prog="openprover",
         description="Theorem prover powered by language models",
     )
-    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral"]
+    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral", "glm-5"]
     parser.add_argument("run_dir", nargs="?", help="Working directory (resumes if it contains an existing run)")
     parser.add_argument("--theorem", metavar="FILE", help="Path to theorem statement file (.md)")
     parser.add_argument("--model", default="sonnet", choices=model_choices, help="Model to use for both planner and worker (default: sonnet)")
@@ -296,10 +297,18 @@ def _cmd_prove():
     MISTRAL_MODEL_MAP = {
         "leanstral": "labs-leanstral-2603",
     }
+    # GLM models reach the Claude CLI through Z.ai's Anthropic-compatible
+    # gateway (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN).  Auth uses the
+    # subscription key from $GLM_API_KEY.
+    GLM_MODEL_MAP = {
+        "glm-5": "glm-5",
+    }
+    GLM_BASE_URL = "https://api.z.ai/api/anthropic"
     VLLM_MODELS = {"minimax-m2.5"}  # served via vLLM (standard OpenAI API)
     MISTRAL_MODELS = {"leanstral"}  # Mistral Conversations API
     CLAUDE_MODELS = {"sonnet", "opus"}
-    TOOL_CAPABLE_MODELS = VLLM_MODELS | CLAUDE_MODELS | MISTRAL_MODELS
+    GLM_MODELS = set(GLM_MODEL_MAP)
+    TOOL_CAPABLE_MODELS = VLLM_MODELS | CLAUDE_MODELS | MISTRAL_MODELS | GLM_MODELS
 
     # ── On resume, load saved config and apply as defaults ──
     if resuming:
@@ -398,7 +407,7 @@ def _cmd_prove():
             )
 
     # Non-Claude models have no web search capability - force isolation
-    non_claude_models = {"minimax-m2.5", "leanstral"}
+    non_claude_models = {"minimax-m2.5", "leanstral"} | GLM_MODELS
     if planner_model in non_claude_models and not args.isolation:
         args.isolation = True
 
@@ -438,6 +447,13 @@ def _cmd_prove():
             return HFClient(HF_MODEL_MAP[model_alias], archive_dir,
                             base_url=args.provider_url, answer_reserve=args.answer_reserve,
                             vllm=model_alias in VLLM_MODELS)
+        if model_alias in GLM_MODEL_MAP:
+            glm_key = os.environ.get("GLM_API_KEY")
+            if not glm_key:
+                parser.error("GLM_API_KEY environment variable not set (required for glm-* models)")
+            return LLMClient(GLM_MODEL_MAP[model_alias], archive_dir,
+                             anthropic_base_url=GLM_BASE_URL,
+                             anthropic_auth_token=glm_key)
         return LLMClient(model_alias, archive_dir, effort=effective_effort)
 
     def make_planner_llm(archive_dir):
@@ -446,7 +462,7 @@ def _cmd_prove():
     def make_worker_llm(archive_dir):
         return _make_client(worker_model, archive_dir)
 
-    MODEL_DISPLAY = {"sonnet": "sonnet 4.6", "opus": "opus 4.6", "leanstral": "leanstral"}
+    MODEL_DISPLAY = {"sonnet": "sonnet 4.6", "opus": "opus 4.6", "leanstral": "leanstral", "glm-5": "glm-5"}
     _p = MODEL_DISPLAY.get(planner_model, planner_model)
     _w = MODEL_DISPLAY.get(worker_model, worker_model)
     model_label = _p if planner_model == worker_model else f"{_p}/{_w}"
