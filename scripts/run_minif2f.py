@@ -105,6 +105,8 @@ def _run_openprover(
 ) -> dict:
     tmpfiles: list[str] = []
     start = time.monotonic()
+    run_dir = bench_dir / "runs" / name
+    run_dir.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(f"{info['informal']}\n")
@@ -113,10 +115,11 @@ def _run_openprover(
 
         cmd = [
             "openprover",
+            str(run_dir),
             "--theorem", theorem_path,
             "--model", args.model,
             "--headless",
-            "-P", str(args.parallelism),
+            "-P", str(args.max_workers),
         ]
         if args.max_tokens:
             cmd.extend(["--max-tokens", str(args.max_tokens)])
@@ -136,7 +139,7 @@ def _run_openprover(
             cmd.extend(["--lean-project", str(lean_project)])
             cmd.extend(["--lean-theorem", f.name])
 
-        hf_models = {"minimax-m2.5"}
+        hf_models: set[str] = set()
         used = {args.model, args.planner_model, args.worker_model} - {None}
         if used & hf_models:
             cmd.extend(["--provider-url", args.provider_url])
@@ -208,7 +211,7 @@ def _run_baseline(
         max_tokens = None
     result = run_baseline(
         name=name,
-        theorem_lean=info["formal"],
+        theorem_lean=LEAN_PREAMBLE + info["formal"],
         theorem_informal=info["informal"],
         lean_project_dir=lean_project,
         model=args.model,
@@ -259,7 +262,7 @@ def _run_all(
     model_label = planner if planner == worker else f"{planner}/{worker}"
     mode = "informal" if args.informal or lean_project is None else "formal"
     print(f"  MiniF2F {args.split}: {total} problems, method={args.method},"
-          f" parallelism={args.problem_parallelism},"
+          f" parallelism={args.parallelism},"
           f" model={model_label}, mode={mode}")
     if carried:
         print(f"  Resumed: {len(carried)} carried over, {len(problems)} to run")
@@ -276,7 +279,7 @@ def _run_all(
         print(f"  Saved to {bench_dir / 'results.json'}")
         return
 
-    with ThreadPoolExecutor(max_workers=args.problem_parallelism) as pool:
+    with ThreadPoolExecutor(max_workers=args.parallelism) as pool:
         futures = {
             pool.submit(runner, name, info, lean_project, bench_dir, args): name
             for name, info in problems.items()
@@ -296,7 +299,7 @@ def _run_all(
             else:
                 errors += 1
 
-            running = min(args.problem_parallelism, total - completed)
+            running = min(args.parallelism, total - completed)
             elapsed_str = _format_time(entry["elapsed"])
             counts = f"P:{proved} F:{not_proved} E:{errors}"
             if running > 0:
@@ -326,10 +329,16 @@ def _run_all(
 # ── Resume helpers ───────────────────────────────────────────────────
 
 # Config keys carried forward when resuming a previous benchmark.
+# Parallelism is intentionally excluded: it's a runtime/resource concern
+# (doesn't affect which problems run or how they're evaluated), so users
+# can tune it per-resume without triggering the conflict check.
 _RESUME_CARRY_KEYS = (
     "method", "split", "model", "planner_model", "worker_model",
-    "max_time", "max_tokens", "parallelism", "informal", "skip", "limit",
+    "max_time", "max_tokens",
+    "informal", "skip", "limit", "repo_path",
 )
+# Keys that need to be coerced back to Path on load (config.json stores strings).
+_RESUME_PATH_KEYS = ("repo_path",)
 
 
 def _load_resume(parser, resume_dir: Path) -> tuple[dict, list[dict]]:
@@ -388,12 +397,13 @@ def main():
                         help="Limit number of problems")
     parser.add_argument("--skip", type=int, default=0,
                         help="Skip first N problems (resume interrupted runs)")
-    parser.add_argument("--problem-parallelism", type=int, default=1,
+    parser.add_argument("--parallelism", type=int, default=1,
                         help="Concurrent problem instances (default: 1)")
-    parser.add_argument("-P", "--parallelism", type=int, default=1,
-                        help="Parallel workers per openprover step (default: 1)")
+    parser.add_argument("-P", "--max-workers", type=int, default=1,
+                        help="Max parallel workers per openprover step "
+                             "(default: 1). Only used with --method openprover.")
 
-    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral"]
+    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral", "glm-5"]
     parser.add_argument("--model", default="sonnet", choices=model_choices)
     parser.add_argument("--planner-model", choices=model_choices, default=None)
     parser.add_argument("--worker-model", choices=model_choices, default=None)
@@ -428,8 +438,10 @@ def main():
         for key in _RESUME_CARRY_KEYS:
             if key not in old_config:
                 continue
-            cli_val = getattr(args, key, None)
             old_val = old_config[key]
+            if key in _RESUME_PATH_KEYS and old_val is not None:
+                old_val = Path(old_val)
+            cli_val = getattr(args, key, None)
             cli_default = parser.get_default(key)
             if cli_val != cli_default and cli_val != old_val:
                 parser.error(
@@ -531,8 +543,9 @@ def main():
         "max_time": args.max_time,
         "max_tokens": args.max_tokens,
         "parallelism": args.parallelism,
-        "problem_parallelism": args.problem_parallelism,
+        "max_workers": args.max_workers,
         "informal": args.informal,
+        "repo_path": str(args.repo_path) if args.repo_path else None,
         "total_problems": len(carried) + len(problems),
         "skip": args.skip,
         "limit": args.limit,

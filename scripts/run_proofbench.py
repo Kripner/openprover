@@ -54,8 +54,6 @@ def main():
         theorem_path = f.name
 
     cmd = ["openprover", theorem_path, "--model", args.model, "--max-steps", str(args.max_steps)]
-    if args.model == "minimax-m2.5":
-        cmd.extend(["--provider-url", args.provider_url])
     if args.autonomous:
         cmd.append("--autonomous")
     if args.isolation:

@@ -184,7 +184,7 @@ class Prover:
                  budget: 'Budget',
                  autonomous: bool, verbose: bool, tui: TUI,
                  isolation: bool = False,
-                 parallelism: int = 1,
+                 max_workers: int = 1,
                  lean_project_dir: Path | None = None,
                  lean_theorem_text: str = "",
                  proof_md_text: str = "",
@@ -211,7 +211,7 @@ class Prover:
         self.verbose = verbose
         self.isolation = isolation
         self.tui = tui
-        self.parallelism = parallelism
+        self.max_workers = max_workers
         self.shutting_down = False
         self._workers_active = False
         self._interrupt_count = 0
@@ -356,7 +356,7 @@ class Prover:
             "model": self.model,
             "budget": self.budget.limit_str(),
             "conclude_after": f"{self.budget.conclude_after:.0%}",
-            "parallelism": str(self.parallelism),
+            "max_workers": str(self.max_workers),
             "isolation": "on" if self.isolation else "off",
             "mode": self.mode,
         }
@@ -589,7 +589,7 @@ class Prover:
             repo_index=repo_index,
             step_history=list(self.step_history),
             budget_status=self.budget.summary_str(),
-            parallelism=self.parallelism,
+            max_workers=self.max_workers,
             theorem_text=self.theorem_text,
             has_lean_theorem=bool(self.lean_theorem_text),
             has_proof_md=(self.work_dir / "PROOF.md").exists(),
@@ -1219,8 +1219,8 @@ class Prover:
                                  resp=planner_resp, error="No tasks specified")
             return "continue"
 
-        # Limit to parallelism
-        tasks = tasks[:self.parallelism]
+        # Limit to max_workers
+        tasks = tasks[:self.max_workers]
 
         self._workers_active = True
         self._interrupt_count = 0

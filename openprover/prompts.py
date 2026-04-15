@@ -611,7 +611,7 @@ def format_planner_prompt(
     repo_index: str,
     step_history: list[dict],
     budget_status: str,
-    parallelism: int = 1,
+    max_workers: int = 1,
     *,
     theorem_text: str = "",
     has_lean_theorem: bool = False,
@@ -680,7 +680,7 @@ def format_planner_prompt(
                 if a_summary:
                     label += f" - {a_summary}"
                 parts.append(f"\n\n# {label}\n\n<action_output>\n{text}\n</action_output>")
-    parts.append(f"\nMax {parallelism} worker(s) per spawn. What's the most productive next move?")
+    parts.append(f"\nMax {max_workers} worker(s) per spawn. What's the most productive next move?")
     return "".join(parts)
 
 

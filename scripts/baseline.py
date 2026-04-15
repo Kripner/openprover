@@ -20,11 +20,21 @@ from pathlib import Path
 from openprover.lean.core import (
     LeanTheorem, LeanWorkDir, lean_has_errors, run_lean_check,
 )
-from openprover.llm import MistralClient
+from openprover.llm import LLMClient, MistralClient, OpenRouterClient
+from openprover.llm._base import is_rate_limited_error, is_transient_error
 
 logger = logging.getLogger("baseline")
 
 MISTRAL_MODEL_MAP = {"leanstral": "labs-leanstral-2603"}
+OPENROUTER_MODEL_MAP = {
+    "kimi-k2.5": "moonshotai/kimi-k2.5",
+    "minimax-m2.5": "minimax/minimax-m2.5",
+    "minimax-m2.7": "minimax/minimax-m2.7",
+}
+CLAUDE_MODELS = {"sonnet", "opus"}
+GLM_MODEL_MAP = {"glm-5": "glm-5"}
+GLM_BASE_URL = "https://api.z.ai/api/anthropic"
+RATE_LIMIT_WAIT = 600  # seconds to wait before retrying after rate limit
 
 # Match ```lean ... ``` (or ```lean4 ... ```) markdown code fences.
 LEAN_FENCE_RE = re.compile(
@@ -82,7 +92,10 @@ def _reindent(replacement: str, column: int) -> str:
 def _verify(code: str, work_dir: LeanWorkDir, project_dir: Path) -> tuple[bool, str]:
     """Run lean_verify and return (success, feedback)."""
     path = work_dir.make_file("baseline_verify", code)
-    success, feedback, _ = run_lean_check(path, project_dir)
+    try:
+        success, feedback, _ = run_lean_check(path, project_dir)
+    finally:
+        path.unlink(missing_ok=True)
     if success:
         return True, "OK"
     if "sorry" in feedback.lower() and not lean_has_errors(feedback):
@@ -243,8 +256,29 @@ def run_baseline(
         with transcript_path.open("a") as f:
             f.write(text)
 
-    mistral_model = MISTRAL_MODEL_MAP.get(model, model)
-    client = MistralClient(model=mistral_model, archive_dir=archive_dir)
+    if model in CLAUDE_MODELS:
+        client = LLMClient(model=model, archive_dir=archive_dir)
+    elif model in GLM_MODEL_MAP:
+        glm_key = os.environ.get("GLM_API_KEY")
+        if not glm_key:
+            print("Error: GLM_API_KEY environment variable not set.", file=sys.stderr)
+            sys.exit(1)
+        client = LLMClient(model=GLM_MODEL_MAP[model], archive_dir=archive_dir,
+                           anthropic_base_url=GLM_BASE_URL,
+                           anthropic_auth_token=glm_key)
+    elif model in OPENROUTER_MODEL_MAP:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            print("Error: OPENROUTER_API_KEY environment variable not set.",
+                  file=sys.stderr)
+            print("  Get an API key from https://openrouter.ai/keys",
+                  file=sys.stderr)
+            sys.exit(1)
+        client = OpenRouterClient(model=OPENROUTER_MODEL_MAP[model],
+                                  archive_dir=archive_dir, api_key=api_key)
+    else:
+        mistral_model = MISTRAL_MODEL_MAP.get(model, model)
+        client = MistralClient(model=mistral_model, archive_dir=archive_dir)
     work_dir = LeanWorkDir(lean_project_dir)
 
     # Parse the input theorem so we can splice proof bodies into its
@@ -261,8 +295,12 @@ def run_baseline(
         num_sorries=parsed.num_sorries,
     )
 
-    # Conversation as a single accumulated user prompt (we restart the
-    # context each turn — no tool/function machinery, no API state).
+    # For Mistral models we use the Conversations API's server-side
+    # context (conversation_id) so we only send the NEW user message
+    # each turn — avoids quadratic memory/disk growth.  For Claude we
+    # still accumulate the full transcript client-side.
+    use_conv_id = getattr(client, "mistral", False)
+    conversation_id: str | None = None
     transcript: list[str] = [initial_user]
     log_lines: list[str] = []
     turns = 0
@@ -310,20 +348,60 @@ def run_baseline(
                 break
 
             turns += 1
-            prompt = "\n\n".join(transcript)
+
+            # With conversation_id the server keeps context — only send
+            # the latest user feedback.  Without it, join the full
+            # transcript into one prompt (Claude path).
+            if use_conv_id and conversation_id is not None:
+                prompt = transcript[-1]   # just the new feedback
+            else:
+                prompt = "\n\n".join(transcript)
+
+            call_kwargs: dict = dict(
+                prompt=prompt,
+                system_prompt=SYSTEM_PROMPT,
+                label=f"baseline-{name}-t{turns}",
+            )
+            if use_conv_id and conversation_id is not None:
+                call_kwargs["conversation_id"] = conversation_id
+
+            def _call_with_retry(**extra):
+                transient_backoff = 4
+                while True:
+                    try:
+                        return client.call(**call_kwargs, **extra)
+                    except RuntimeError as e:
+                        if is_rate_limited_error(e):
+                            log(f"turn {turns}: rate/spending limit hit: "
+                                f"{str(e).splitlines()[0][:200]}")
+                            log(f"turn {turns}: waiting "
+                                f"{RATE_LIMIT_WAIT // 60}m before retry")
+                            time.sleep(RATE_LIMIT_WAIT)
+                            continue
+                        if is_transient_error(e):
+                            log(f"turn {turns}: transient error: "
+                                f"{str(e).splitlines()[0][:200]}")
+                            log(f"turn {turns}: waiting {transient_backoff}s "
+                                f"before retry")
+                            time.sleep(transient_backoff)
+                            transient_backoff = min(transient_backoff * 2, 60)
+                            continue
+                        raise
 
             if stream:
                 print(f"\n  ─── turn {turns} ───", flush=True)
-                resp = client.call(prompt=prompt, system_prompt=SYSTEM_PROMPT,
-                                   stream_callback=stream_cb,
-                                   label=f"baseline-{name}-t{turns}")
+                resp = _call_with_retry(stream_callback=stream_cb)
                 if state["in_thinking"]:
                     sys.stdout.write(reset)
                     state["in_thinking"] = False
                 print(flush=True)
             else:
-                resp = client.call(prompt=prompt, system_prompt=SYSTEM_PROMPT,
-                                   label=f"baseline-{name}-t{turns}")
+                resp = _call_with_retry()
+
+            # Capture conversation_id from the first response so
+            # subsequent turns continue the same server-side context.
+            if use_conv_id and conversation_id is None:
+                conversation_id = resp.get("conversation_id")
 
             assistant_text = resp.get("result", "") or ""
             thinking_text = resp.get("thinking", "") or ""
@@ -380,14 +458,21 @@ def run_baseline(
                     f"got {len(blocks)}."
                 )
                 _flush_turn()
-                transcript.append(
-                    f"# Assistant turn {turns}\n{assistant_text}\n\n"
-                    f"# User\nExpected {parsed.num_sorries} ```lean ... ``` "
+                feedback_msg = (
+                    f"Expected {parsed.num_sorries} ```lean ... ``` "
                     f"code fence(s) (one per `sorry`), got {len(blocks)}. "
                     "Output exactly the right number of fenced blocks, in "
                     "order, each containing only the proof body that "
                     "replaces the corresponding `sorry`."
                 )
+                if use_conv_id:
+                    # Server has the assistant reply; just queue feedback.
+                    transcript.append(feedback_msg)
+                else:
+                    transcript.append(
+                        f"# Assistant turn {turns}\n{assistant_text}\n\n"
+                        f"# User\n{feedback_msg}"
+                    )
                 continue
 
             # Re-indent each replacement so multi-line proof bodies sit
@@ -408,12 +493,18 @@ def run_baseline(
                 turn_outcome["outcome"] = "rejected"
                 turn_outcome["feedback"] = str(e)
                 _flush_turn()
-                transcript.append(
-                    f"# Assistant turn {turns}\n{assistant_text}\n\n"
-                    f"# User\nYour proof block was rejected: {e}. "
+                feedback_msg = (
+                    f"Your proof block was rejected: {e}. "
                     "Output a fresh ```lean ... ``` block containing only "
                     "the proof body."
                 )
+                if use_conv_id:
+                    transcript.append(feedback_msg)
+                else:
+                    transcript.append(
+                        f"# Assistant turn {turns}\n{assistant_text}\n\n"
+                        f"# User\n{feedback_msg}"
+                    )
                 continue
 
             verifications += 1
@@ -456,12 +547,18 @@ def run_baseline(
                 for line in preview.splitlines():
                     print(f"  │ {line}", flush=True)
 
-            transcript.append(
-                f"# Assistant turn {turns}\n{assistant_text}\n\n"
-                f"# User\nlean_verify failed:\n```\n{feedback}\n```\n"
+            feedback_msg = (
+                f"lean_verify failed:\n```\n{feedback}\n```\n"
                 "Try again. Output the full Lean source inside a "
                 "```lean ... ``` code fence."
             )
+            if use_conv_id:
+                transcript.append(feedback_msg)
+            else:
+                transcript.append(
+                    f"# Assistant turn {turns}\n{assistant_text}\n\n"
+                    f"# User\n{feedback_msg}"
+                )
 
     except Exception as e:
         elapsed = time.monotonic() - start

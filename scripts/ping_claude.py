@@ -25,6 +25,16 @@ CLAUDE_MODEL_ALIASES = {
     "sonnet": "claude-sonnet-4-6",
     "opus":   "claude-opus-4-6",
     "haiku":  "claude-haiku-4-5-20251001",
+    "glm-5":  "glm-5",
+}
+
+# Aliases that route the Claude CLI to a non-Anthropic Anthropic-compatible
+# endpoint by setting ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN.
+PROVIDER_OVERRIDES = {
+    "glm-5": {
+        "base_url": "https://api.z.ai/api/anthropic",
+        "key_env":  "GLM_API_KEY",
+    },
 }
 
 DEFAULT_PROMPT = (
@@ -43,7 +53,8 @@ SYSTEM_PROMPT = "You are a helpful assistant. Answer the user's question directl
 
 def run_claude(model: str, prompt: str, max_tokens: int,
                effort: str | None, no_thinking: bool,
-               show_thinking: bool, debug: bool) -> None:
+               show_thinking: bool, debug: bool,
+               provider: dict | None = None) -> None:
     cmd = [
         "claude", "-p",
         "--model", model,
@@ -62,7 +73,17 @@ def run_claude(model: str, prompt: str, max_tokens: int,
         env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
         env["MAX_THINKING_TOKENS"] = "0"
 
+    if provider:
+        key = os.environ.get(provider["key_env"])
+        if not key:
+            print(f"{RED}error: ${provider['key_env']} is not set{RESET}", file=sys.stderr)
+            sys.exit(2)
+        env["ANTHROPIC_BASE_URL"] = provider["base_url"]
+        env["ANTHROPIC_AUTH_TOKEN"] = key
+
     print(f"Model:      {model}")
+    if provider:
+        print(f"Provider:   {provider['base_url']}")
     print(f"Effort:     {effort or '(default)'}")
     print(f"No-thinking env: {'yes' if no_thinking else 'no'}")
     print(f"Max tokens: {max_tokens}")
@@ -172,7 +193,9 @@ def main():
     )
     parser.add_argument(
         "--model", default="sonnet",
-        help="Model alias (sonnet, opus, haiku) or full model ID (default: sonnet)"
+        help="Model alias (sonnet, opus, haiku, glm-5) or full model ID (default: sonnet). "
+             "'glm-5' routes the Claude CLI to Zhipu's Anthropic-compatible endpoint "
+             "(requires $GLM_API_KEY)."
     )
     parser.add_argument(
         "--prompt", default=DEFAULT_PROMPT,
@@ -200,6 +223,7 @@ def main():
     )
     args = parser.parse_args()
 
+    provider = PROVIDER_OVERRIDES.get(args.model)
     model = CLAUDE_MODEL_ALIASES.get(args.model, args.model)
 
     run_claude(
@@ -210,6 +234,7 @@ def main():
         no_thinking=args.no_thinking,
         show_thinking=args.show_thinking,
         debug=args.debug,
+        provider=provider,
     )
 
 

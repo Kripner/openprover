@@ -40,7 +40,7 @@ def _run_problem(problem_name: str, statement: str, lean_dir: Path,
     cmd = ["openprover", "--theorem", theorem_path,
            "--model", args.model,
            "--max-time", args.max_time, "--headless",
-           "-P", str(args.parallelism)]
+           "-P", str(args.max_workers)]
 
     if args.planner_model:
         cmd.extend(["--planner-model", args.planner_model])
@@ -53,7 +53,7 @@ def _run_problem(problem_name: str, statement: str, lean_dir: Path,
             cmd.extend(["--lean-project", str(lean_dir)])
             cmd.extend(["--lean-theorem", str(lean_theorem_path)])
 
-    hf_models = {"minimax-m2.5"}
+    hf_models: set[str] = set()
     used_models = {args.model, args.planner_model, args.worker_model} - {None}
     if used_models & hf_models:
         cmd.extend(["--provider-url", args.provider_url])
@@ -91,10 +91,10 @@ def _run_parallel(problems: dict[str, str], lean_dir: Path,
     planner = args.planner_model or args.model
     worker = args.worker_model or args.model
     model_label = planner if planner == worker else f"{planner}/{worker}"
-    print(f"  Putnam Bench: {total} problems, problem_parallelism={args.problem_parallelism},"
+    print(f"  Putnam Bench: {total} problems, parallelism={args.parallelism},"
           f" model={model_label}\n")
 
-    with ThreadPoolExecutor(max_workers=args.problem_parallelism) as pool:
+    with ThreadPoolExecutor(max_workers=args.parallelism) as pool:
         futures = {
             pool.submit(_run_problem, name, stmt, lean_dir, args): name
             for name, stmt in problems.items()
@@ -111,7 +111,7 @@ def _run_parallel(problems: dict[str, str], lean_dir: Path,
             else:
                 errors += 1
 
-            running = min(args.problem_parallelism, total - completed)
+            running = min(args.parallelism, total - completed)
             elapsed_str = _format_time(elapsed)
 
             status_display = status.replace("_", " ")
@@ -139,10 +139,11 @@ def main():
                         help="Path to cloned PutnamBench repository (default: ./PutnamBench)")
     parser.add_argument("--problem", help="Specific problem name to run (e.g., putnam_1962_a1)")
     parser.add_argument("--limit", type=int, help="Limit number of problems to run")
-    parser.add_argument("--problem-parallelism", type=int, default=1,
-                        help="Number of concurrent openprover instances (default: 1)")
-    parser.add_argument("-P", "--parallelism", type=int, default=1,
-                        help="Max parallel workers per spawn step inside openprover (default: 1)")
+    parser.add_argument("--parallelism", type=int, default=1,
+                        help="Concurrent openprover instances (default: 1)")
+    parser.add_argument("-P", "--max-workers", type=int, default=1,
+                        help="Max parallel workers per spawn step inside "
+                             "openprover (default: 1).")
     model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral"]
     parser.add_argument("--model", default="sonnet", choices=model_choices)
     parser.add_argument("--planner-model", choices=model_choices, default=None,
@@ -200,7 +201,7 @@ def main():
     if args.limit is not None:
         problems = dict(list(problems.items())[:args.limit])
 
-    if args.problem_parallelism > 1:
+    if args.parallelism > 1:
         _run_parallel(problems, lean_dir, args)
         return
 
@@ -214,7 +215,7 @@ def main():
         cmd = ["openprover", "--theorem", theorem_path,
                "--model", args.model,
                "--max-time", args.max_time,
-               "-P", str(args.parallelism)]
+               "-P", str(args.max_workers)]
 
         if args.planner_model:
             cmd.extend(["--planner-model", args.planner_model])
@@ -230,7 +231,7 @@ def main():
                 print(f"Warning: Lean theorem not found at {lean_theorem_path}."
                       " Running without formal verification.", file=sys.stderr)
 
-        hf_models = {"minimax-m2.5"}
+        hf_models: set[str] = set()
         used_models = {args.model, args.planner_model, args.worker_model} - {None}
         if used_models & hf_models:
             cmd.extend(["--provider-url", args.provider_url])

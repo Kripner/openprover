@@ -2,6 +2,7 @@
 
 import argparse
 import atexit
+import os
 import re
 import signal
 import sys
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from openprover import __version__
 from .budget import Budget, parse_duration
-from .llm import LLMClient, HFClient, MistralClient
+from .llm import LLMClient, HFClient, MistralClient, OpenRouterClient
 from .prover import Prover, slugify
 from .tui import TUI, HeadlessTUI
 
@@ -27,7 +28,7 @@ def _cli_flag_given(*flags: str) -> bool:
 def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
                      budget_mode: str, budget_limit: int,
                      conclude_after: float,
-                     parallelism: int,
+                     max_workers: int,
                      isolation: bool, autonomous: bool, mode: str,
                      lean_project_dir: Path | None, lean_items: bool,
                      lean_worker_tools: bool, provider_url: str,
@@ -40,7 +41,7 @@ def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
         f'budget_mode = "{budget_mode}"',
         f'budget_limit = {budget_limit}',
         f'conclude_after = {conclude_after}',
-        f'parallelism = {parallelism}',
+        f'max_workers = {max_workers}',
         f'isolation = {str(isolation).lower()}',
         f'autonomous = {str(autonomous).lower()}',
         f'mode = "{mode}"',
@@ -228,7 +229,7 @@ def _cmd_prove():
         prog="openprover",
         description="Theorem prover powered by language models",
     )
-    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral"]
+    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral", "glm-5", "kimi-k2.5", "minimax-m2.7"]
     parser.add_argument("run_dir", nargs="?", help="Working directory (resumes if it contains an existing run)")
     parser.add_argument("--theorem", metavar="FILE", help="Path to theorem statement file (.md)")
     parser.add_argument("--model", default="sonnet", choices=model_choices, help="Model to use for both planner and worker (default: sonnet)")
@@ -242,7 +243,7 @@ def _cmd_prove():
     parser.add_argument("--autonomous", action="store_true", help="Start in autonomous mode (default: interactive)")
     parser.add_argument("--read-only", action="store_true", help="Inspect run without resuming")
     parser.add_argument("--isolation", action=argparse.BooleanOptionalAction, default=True, help="Disable web searches (no literature_search action)")
-    parser.add_argument("-P", "--parallelism", type=int, default=1, help="Max parallel workers per spawn step (default: 1)")
+    parser.add_argument("-P", "--max-workers", type=int, default=1, help="Max parallel workers per spawn step (default: 1)")
     parser.add_argument("--answer-reserve", type=int, default=4096, metavar="TOKENS", help="Tokens reserved for answer after thinking (default: 4096)")
     parser.add_argument("--history-budget", type=int, default=0, metavar="CHARS", help="Char budget for planner history (default: auto from model context)")
     parser.add_argument("--effort", choices=["low", "medium", "high", "max"], default=None,
@@ -290,16 +291,30 @@ def _cmd_prove():
      mode, resuming, read_only) = _resolve_inputs(parser, args)
 
     # Map short model names to backend-specific model IDs
-    HF_MODEL_MAP = {
-        "minimax-m2.5": "MiniMaxAI/MiniMax-M2.5",
-    }
+    HF_MODEL_MAP: dict[str, str] = {}
     MISTRAL_MODEL_MAP = {
         "leanstral": "labs-leanstral-2603",
     }
-    VLLM_MODELS = {"minimax-m2.5"}  # served via vLLM (standard OpenAI API)
+    # GLM models reach the Claude CLI through Z.ai's Anthropic-compatible
+    # gateway (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN).  Auth uses the
+    # subscription key from $GLM_API_KEY.
+    GLM_MODEL_MAP = {
+        "glm-5": "glm-5",
+    }
+    GLM_BASE_URL = "https://api.z.ai/api/anthropic"
+    # OpenRouter hosts several models under an OpenAI-compatible API.
+    OPENROUTER_MODEL_MAP = {
+        "kimi-k2.5": "moonshotai/kimi-k2.5",
+        "minimax-m2.5": "minimax/minimax-m2.5",
+        "minimax-m2.7": "minimax/minimax-m2.7",
+    }
+    VLLM_MODELS: set[str] = set()  # vLLM-served local models (currently none)
     MISTRAL_MODELS = {"leanstral"}  # Mistral Conversations API
     CLAUDE_MODELS = {"sonnet", "opus"}
-    TOOL_CAPABLE_MODELS = VLLM_MODELS | CLAUDE_MODELS | MISTRAL_MODELS
+    GLM_MODELS = set(GLM_MODEL_MAP)
+    OPENROUTER_MODELS = set(OPENROUTER_MODEL_MAP)
+    TOOL_CAPABLE_MODELS = (VLLM_MODELS | CLAUDE_MODELS | MISTRAL_MODELS
+                           | GLM_MODELS | OPENROUTER_MODELS)
 
     # ── On resume, load saved config and apply as defaults ──
     if resuming:
@@ -326,8 +341,8 @@ def _cmd_prove():
                 args._saved_budget_limit = saved.get("budget_limit", 3600)
             if not _cli_flag_given("--conclude-after"):
                 args.conclude_after = saved.get("conclude_after", args.conclude_after)
-            if not _cli_flag_given("-P", "--parallelism"):
-                args.parallelism = saved.get("parallelism", args.parallelism)
+            if not _cli_flag_given("-P", "--max-workers"):
+                args.max_workers = saved.get("max_workers", args.max_workers)
             if not _cli_flag_given("--isolation", "--no-isolation"):
                 args.isolation = saved.get("isolation", args.isolation)
             if not _cli_flag_given("--autonomous"):
@@ -398,7 +413,7 @@ def _cmd_prove():
             )
 
     # Non-Claude models have no web search capability - force isolation
-    non_claude_models = {"minimax-m2.5", "leanstral"}
+    non_claude_models = {"leanstral"} | GLM_MODELS | OPENROUTER_MODELS
     if planner_model in non_claude_models and not args.isolation:
         args.isolation = True
 
@@ -421,7 +436,7 @@ def _cmd_prove():
         if not args.lean_project:
             parser.error("--lean-worker-tools requires --lean-project")
         if worker_model not in TOOL_CAPABLE_MODELS:
-            parser.error("--lean-worker-tools requires a tool-capable worker model (sonnet, opus, minimax-m2.5, or leanstral)")
+            parser.error("--lean-worker-tools requires a tool-capable worker model (sonnet, opus, minimax-m2.5, leanstral, glm-5, kimi-k2.5, or minimax-m2.7)")
         # Auto-fetch Lean Explore data if not available
         from .lean.data import is_lean_data_available, fetch_lean_data
         if not is_lean_data_available():
@@ -438,6 +453,20 @@ def _cmd_prove():
             return HFClient(HF_MODEL_MAP[model_alias], archive_dir,
                             base_url=args.provider_url, answer_reserve=args.answer_reserve,
                             vllm=model_alias in VLLM_MODELS)
+        if model_alias in GLM_MODEL_MAP:
+            glm_key = os.environ.get("GLM_API_KEY")
+            if not glm_key:
+                parser.error("GLM_API_KEY environment variable not set (required for glm-* models)")
+            return LLMClient(GLM_MODEL_MAP[model_alias], archive_dir,
+                             anthropic_base_url=GLM_BASE_URL,
+                             anthropic_auth_token=glm_key)
+        if model_alias in OPENROUTER_MODEL_MAP:
+            or_key = os.environ.get("OPENROUTER_API_KEY")
+            if not or_key:
+                parser.error("OPENROUTER_API_KEY environment variable not set (required for OpenRouter models)")
+            return OpenRouterClient(OPENROUTER_MODEL_MAP[model_alias], archive_dir,
+                                    api_key=or_key,
+                                    answer_reserve=args.answer_reserve)
         return LLMClient(model_alias, archive_dir, effort=effective_effort)
 
     def make_planner_llm(archive_dir):
@@ -446,7 +475,7 @@ def _cmd_prove():
     def make_worker_llm(archive_dir):
         return _make_client(worker_model, archive_dir)
 
-    MODEL_DISPLAY = {"sonnet": "sonnet 4.6", "opus": "opus 4.6", "leanstral": "leanstral"}
+    MODEL_DISPLAY = {"sonnet": "sonnet 4.6", "opus": "opus 4.6", "leanstral": "leanstral", "glm-5": "glm-5", "kimi-k2.5": "kimi-k2.5", "minimax-m2.7": "minimax-m2.7"}
     _p = MODEL_DISPLAY.get(planner_model, planner_model)
     _w = MODEL_DISPLAY.get(worker_model, worker_model)
     model_label = _p if planner_model == worker_model else f"{_p}/{_w}"
@@ -482,7 +511,7 @@ def _cmd_prove():
             budget_mode=budget_mode,
             budget_limit=budget_limit,
             conclude_after=args.conclude_after,
-            parallelism=args.parallelism,
+            max_workers=args.max_workers,
             isolation=args.isolation,
             autonomous=args.autonomous,
             mode=mode,
@@ -505,7 +534,7 @@ def _cmd_prove():
         verbose=args.verbose,
         tui=tui,
         isolation=args.isolation,
-        parallelism=args.parallelism,
+        max_workers=args.max_workers,
         lean_project_dir=args.lean_project,
         lean_theorem_text=lean_theorem_text,
         proof_md_text=proof_md_text,

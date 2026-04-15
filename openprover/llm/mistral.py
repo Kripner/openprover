@@ -99,6 +99,7 @@ class MistralClient:
     """Calls the Mistral Conversations API and archives interactions."""
 
     context_length = 256_000
+    max_completion_tokens = 32_000  # API hard cap per response
     mistral = True  # Used by prover for tool-routing dispatch
 
     def __init__(self, model: str, archive_dir: Path, answer_reserve: int = 4096):
@@ -150,7 +151,34 @@ class MistralClient:
                 "Authorization": f"Bearer {self._api_key}",
             },
         )
-        return urllib.request.urlopen(req, timeout=timeout)
+        # Retry transient failures indefinitely with exponential backoff
+        # up to 120s: 5xx (server errors), 409 (conversation busy),
+        # 429 (rate limit), and connection resets.  Other 4xx are
+        # surfaced immediately.
+        RETRYABLE_CODES = {409, 429}
+        delays = [2, 5, 15, 30, 60, 120]  # then repeat 120s forever
+        attempt = 0
+        while True:
+            if attempt > 0:
+                delay = delays[min(attempt - 1, len(delays) - 1)]
+                if self._interrupted.is_set():
+                    raise Interrupted()
+                logger.warning(
+                    "mistral request failed, retrying in %ds (attempt %d)",
+                    delay, attempt)
+                time.sleep(delay)
+            try:
+                return urllib.request.urlopen(req, timeout=timeout)
+            except urllib.error.HTTPError as e:
+                retryable = (500 <= e.code < 600) or e.code in RETRYABLE_CODES
+                if retryable:
+                    attempt += 1
+                    continue
+                raise
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                logger.warning("mistral connection error: %s", e)
+                attempt += 1
+                continue
 
     # ── call() ───────────────────────────────────────────────────────
 
@@ -167,11 +195,17 @@ class MistralClient:
         tool_start_callback=None,
         max_tokens: int | None = None,
         no_thinking: bool = False,
+        conversation_id: str | None = None,
     ) -> dict:
         """Single-turn call. Same interface as LLMClient.call().
 
         tool_callback and tool_start_callback are accepted for interface
         compatibility but ignored (Mistral tool calling uses chat()).
+
+        When conversation_id is provided, continues an existing Mistral
+        conversation — only the new user prompt is sent (the server
+        retains prior context).  This avoids re-sending the full
+        transcript every turn and keeps memory/disk usage constant.
         """
         self.call_count += 1
         call_num = self.call_count
@@ -179,8 +213,9 @@ class MistralClient:
         self._archive(call_num, label, prompt, system_prompt, json_schema,
                       None, None, 0, archive_path)
 
-        logger.info("[%s] calling %s%s", label, self.model,
-                    " (streaming)" if stream_callback else "")
+        logger.info("[%s] calling %s%s conv=%s", label, self.model,
+                    " (streaming)" if stream_callback else "",
+                    conversation_id or "(new)")
 
         payload = self._build_payload(
             inputs=[{"role": "user", "content": prompt}],
@@ -188,6 +223,7 @@ class MistralClient:
             max_tokens=max_tokens,
             stream=bool(stream_callback),
             no_thinking=no_thinking,
+            continuation=bool(conversation_id),
         )
         start = time.time()
 
@@ -201,11 +237,13 @@ class MistralClient:
                 return self._stream(
                     payload, call_num, label, start, stream_callback, archive_path,
                     prompt=prompt, system_prompt=system_prompt, json_schema=json_schema,
+                    conversation_id=conversation_id,
                 )
             else:
                 return self._non_streaming(
                     payload, call_num, label, start, archive_path,
                     prompt=prompt, system_prompt=system_prompt, json_schema=json_schema,
+                    conversation_id=conversation_id,
                 )
         except (urllib.error.URLError, ConnectionError) as e:
             elapsed_ms = int((time.time() - start) * 1000)
@@ -340,9 +378,8 @@ class MistralClient:
             effective_max = self.max_output_tokens
         else:
             # Thinking enabled: thinking + output share the max_tokens budget.
-            # Use the full context length so thinking doesn't crowd out output.
-            # The API caps at (context_length - prompt_tokens) automatically.
-            effective_max = self.context_length
+            # Cap at the API's per-response ceiling (32K for leanstral).
+            effective_max = self.max_completion_tokens
         if continuation:
             # Continuation of existing conversation: only inputs,
             # stream, and completion_args.  model/tools/instructions
