@@ -53,7 +53,7 @@ def _run_problem(problem_name: str, statement: str, lean_dir: Path,
             cmd.extend(["--lean-project", str(lean_dir)])
             cmd.extend(["--lean-theorem", str(lean_theorem_path)])
 
-    hf_models = {"minimax-m2.5"}
+    hf_models: set[str] = set()
     used_models = {args.model, args.planner_model, args.worker_model} - {None}
     if used_models & hf_models:
         cmd.extend(["--provider-url", args.provider_url])
@@ -231,7 +231,7 @@ def main():
                 print(f"Warning: Lean theorem not found at {lean_theorem_path}."
                       " Running without formal verification.", file=sys.stderr)
 
-        hf_models = {"minimax-m2.5"}
+        hf_models: set[str] = set()
         used_models = {args.model, args.planner_model, args.worker_model} - {None}
         if used_models & hf_models:
             cmd.extend(["--provider-url", args.provider_url])

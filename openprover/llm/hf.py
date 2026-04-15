@@ -57,9 +57,7 @@ def _split_think_tags(text: str) -> tuple[str, str]:
     return (text, "")
 
 
-MODEL_CONTEXT_LENGTHS = {
-    "MiniMaxAI/MiniMax-M2.5": 196608,
-}
+MODEL_CONTEXT_LENGTHS: dict[str, int] = {}
 
 
 # Per-read timeout for streaming responses (seconds).  If the server stops

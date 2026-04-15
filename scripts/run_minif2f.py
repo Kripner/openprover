@@ -136,7 +136,7 @@ def _run_openprover(
             cmd.extend(["--lean-project", str(lean_project)])
             cmd.extend(["--lean-theorem", f.name])
 
-        hf_models = {"minimax-m2.5"}
+        hf_models: set[str] = set()
         used = {args.model, args.planner_model, args.worker_model} - {None}
         if used & hf_models:
             cmd.extend(["--provider-url", args.provider_url])
