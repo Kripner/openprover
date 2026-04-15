@@ -105,6 +105,8 @@ def _run_openprover(
 ) -> dict:
     tmpfiles: list[str] = []
     start = time.monotonic()
+    run_dir = bench_dir / "runs" / name
+    run_dir.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(f"{info['informal']}\n")
@@ -113,6 +115,7 @@ def _run_openprover(
 
         cmd = [
             "openprover",
+            str(run_dir),
             "--theorem", theorem_path,
             "--model", args.model,
             "--headless",

@@ -20,12 +20,17 @@ from pathlib import Path
 from openprover.lean.core import (
     LeanTheorem, LeanWorkDir, lean_has_errors, run_lean_check,
 )
-from openprover.llm import LLMClient, MistralClient
+from openprover.llm import LLMClient, MistralClient, OpenRouterClient
 from openprover.llm._base import is_rate_limited_error
 
 logger = logging.getLogger("baseline")
 
 MISTRAL_MODEL_MAP = {"leanstral": "labs-leanstral-2603"}
+OPENROUTER_MODEL_MAP = {
+    "kimi-k2.5": "moonshotai/kimi-k2.5",
+    "minimax-m2.5": "minimax/minimax-m2.5",
+    "minimax-m2.7": "minimax/minimax-m2.7",
+}
 CLAUDE_MODELS = {"sonnet", "opus"}
 RATE_LIMIT_WAIT = 600  # seconds to wait before retrying after rate limit
 
@@ -251,6 +256,16 @@ def run_baseline(
 
     if model in CLAUDE_MODELS:
         client = LLMClient(model=model, archive_dir=archive_dir)
+    elif model in OPENROUTER_MODEL_MAP:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            print("Error: OPENROUTER_API_KEY environment variable not set.",
+                  file=sys.stderr)
+            print("  Get an API key from https://openrouter.ai/keys",
+                  file=sys.stderr)
+            sys.exit(1)
+        client = OpenRouterClient(model=OPENROUTER_MODEL_MAP[model],
+                                  archive_dir=archive_dir, api_key=api_key)
     else:
         mistral_model = MISTRAL_MODEL_MAP.get(model, model)
         client = MistralClient(model=mistral_model, archive_dir=archive_dir)
