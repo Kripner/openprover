@@ -28,6 +28,24 @@ def is_rate_limited_error(exc: Exception) -> bool:
             or ("rate" in msg and "limit" in msg))
 
 
+def is_transient_error(exc: Exception) -> bool:
+    """Detect transient errors worth retrying (timeouts, gateway hiccups).
+
+    Covers request timeouts from upstream gateways (notably Z.ai's Anthropic
+    bridge for GLM, which sporadically returns exit-1 with
+    `result: "Request timed out"`) and common 5xx gateway errors.
+    """
+    msg = str(exc).lower()
+    if any(code in msg for code in ("502", "503", "504")):
+        return True
+    return ("request timed out" in msg
+            or "request timeout" in msg
+            or "read timed out" in msg
+            or "connection reset" in msg
+            or "connection aborted" in msg
+            or ("gateway" in msg and "time" in msg))
+
+
 def archive(model, archive_dir, call_num, label, prompt, system_prompt,
             json_schema, response, error, elapsed_ms, archive_path=None,
             *, thinking="", result_text=""):

@@ -21,7 +21,7 @@ from openprover.lean.core import (
     LeanTheorem, LeanWorkDir, lean_has_errors, run_lean_check,
 )
 from openprover.llm import LLMClient, MistralClient, OpenRouterClient
-from openprover.llm._base import is_rate_limited_error
+from openprover.llm._base import is_rate_limited_error, is_transient_error
 
 logger = logging.getLogger("baseline")
 
@@ -32,6 +32,8 @@ OPENROUTER_MODEL_MAP = {
     "minimax-m2.7": "minimax/minimax-m2.7",
 }
 CLAUDE_MODELS = {"sonnet", "opus"}
+GLM_MODEL_MAP = {"glm-5": "glm-5"}
+GLM_BASE_URL = "https://api.z.ai/api/anthropic"
 RATE_LIMIT_WAIT = 600  # seconds to wait before retrying after rate limit
 
 # Match ```lean ... ``` (or ```lean4 ... ```) markdown code fences.
@@ -256,6 +258,14 @@ def run_baseline(
 
     if model in CLAUDE_MODELS:
         client = LLMClient(model=model, archive_dir=archive_dir)
+    elif model in GLM_MODEL_MAP:
+        glm_key = os.environ.get("GLM_API_KEY")
+        if not glm_key:
+            print("Error: GLM_API_KEY environment variable not set.", file=sys.stderr)
+            sys.exit(1)
+        client = LLMClient(model=GLM_MODEL_MAP[model], archive_dir=archive_dir,
+                           anthropic_base_url=GLM_BASE_URL,
+                           anthropic_auth_token=glm_key)
     elif model in OPENROUTER_MODEL_MAP:
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
@@ -356,17 +366,27 @@ def run_baseline(
                 call_kwargs["conversation_id"] = conversation_id
 
             def _call_with_retry(**extra):
+                transient_backoff = 4
                 while True:
                     try:
                         return client.call(**call_kwargs, **extra)
                     except RuntimeError as e:
-                        if not is_rate_limited_error(e):
-                            raise
-                        log(f"turn {turns}: rate/spending limit hit: "
-                            f"{str(e).splitlines()[0][:200]}")
-                        log(f"turn {turns}: waiting "
-                            f"{RATE_LIMIT_WAIT // 60}m before retry")
-                        time.sleep(RATE_LIMIT_WAIT)
+                        if is_rate_limited_error(e):
+                            log(f"turn {turns}: rate/spending limit hit: "
+                                f"{str(e).splitlines()[0][:200]}")
+                            log(f"turn {turns}: waiting "
+                                f"{RATE_LIMIT_WAIT // 60}m before retry")
+                            time.sleep(RATE_LIMIT_WAIT)
+                            continue
+                        if is_transient_error(e):
+                            log(f"turn {turns}: transient error: "
+                                f"{str(e).splitlines()[0][:200]}")
+                            log(f"turn {turns}: waiting {transient_backoff}s "
+                                f"before retry")
+                            time.sleep(transient_backoff)
+                            transient_backoff = min(transient_backoff * 2, 60)
+                            continue
+                        raise
 
             if stream:
                 print(f"\n  ─── turn {turns} ───", flush=True)

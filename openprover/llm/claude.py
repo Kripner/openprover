@@ -187,12 +187,21 @@ class LLMClient:
         elapsed_ms = int((time.time() - start) * 1000)
 
         if proc.returncode != 0:
+            # Capture both streams — some gateways (e.g. GLM via Z.ai) print
+            # the failure reason to stdout rather than stderr, and exiting
+            # with empty stderr leaves us with no clue what happened.
+            diag = (
+                f"exit {proc.returncode} after {elapsed_ms}ms\n"
+                f"--- stderr ---\n{stderr or '(empty)'}\n"
+                f"--- stdout ---\n{stdout or '(empty)'}"
+            )
             self._archive(call_num, label, prompt, system_prompt, json_schema,
-                          None, stderr, elapsed_ms, archive_path)
+                          None, diag, elapsed_ms, archive_path)
             if self._interrupted.is_set():
                 logger.info("[%s] interrupted after %dms", label, elapsed_ms)
                 raise Interrupted()
-            raise RuntimeError(f"Claude CLI failed (exit {proc.returncode}): {stderr[:500]}")
+            tail = (stderr or stdout or "(no output)")[:500]
+            raise RuntimeError(f"Claude CLI failed (exit {proc.returncode}): {tail}")
 
         try:
             raw = json.loads(stdout)
