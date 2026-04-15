@@ -27,6 +27,12 @@ MODEL_CONTEXT_LENGTHS = {
     "minimax/minimax-m2.7": 196_608,
 }
 
+# Per-response completion cap when reasoning is enabled. Reasoning tokens
+# and output text share this budget; 4 KB is too small — minimax-m2.5 alone
+# burns ~3 K reasoning tokens before emitting any answer, producing empty
+# content with finish_reason=length.
+MAX_COMPLETION_TOKENS_REASONING = 32_768
+
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Recommended attribution headers (https://openrouter.ai/docs/api-reference/overview)
@@ -79,10 +85,13 @@ class OpenRouterClient:
         self.total_cost = 0.0
         self.context_length = MODEL_CONTEXT_LENGTHS[model]
         self.answer_reserve = answer_reserve
-        # Conservative per-call output budget; OpenRouter rejects requests that
-        # reserve more than the model's completion cap.
-        self.max_output_tokens = answer_reserve
         self.reasoning_effort = reasoning_effort
+        # When reasoning is on, reasoning + visible content share the cap,
+        # so use a large ceiling instead of answer_reserve (which sizes the
+        # *answer* only). Otherwise answer_reserve is the full budget.
+        self.max_output_tokens = (
+            MAX_COMPLETION_TOKENS_REASONING if reasoning_effort else answer_reserve
+        )
         self.referer = referer
         self.title = title
         self._interrupted = threading.Event()
@@ -256,13 +265,45 @@ class OpenRouterClient:
                     call_num, label, start, archive_path, *, expect_tools=False):
         try:
             resp = self._make_request(payload)
-            raw = json.loads(resp.read())
+            body_bytes = resp.read()
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
             elapsed_ms = int((time.time() - start) * 1000)
             self._archive(call_num, label, prompt, system_prompt, json_schema,
                           None, f"HTTP {e.code}: {body}", elapsed_ms, archive_path)
             raise RuntimeError(f"HTTP {e.code}: {body[:1000]}")
+
+        try:
+            raw = json.loads(body_bytes)
+        except json.JSONDecodeError:
+            # OpenRouter emits `: OPENROUTER PROCESSING` SSE-style keep-alive
+            # comment lines during long non-streaming waits (providers like
+            # SambaNova can take tens of minutes). Strip comment lines and
+            # retry; if a real JSON object is embedded, we'll find it.
+            text = body_bytes.decode(errors="replace")
+            cleaned = "\n".join(
+                ln for ln in text.splitlines() if not ln.lstrip().startswith(":")
+            ).strip()
+            try:
+                raw = json.loads(cleaned)
+            except json.JSONDecodeError as e:
+                elapsed_ms = int((time.time() - start) * 1000)
+                # Preserve the raw body so we can diagnose what the upstream
+                # actually sent (truncation, HTML error page, etc.).
+                if archive_path is not None:
+                    try:
+                        archive_path.parent.mkdir(parents=True, exist_ok=True)
+                        archive_path.with_suffix(".raw.body").write_bytes(body_bytes)
+                    except Exception:
+                        pass
+                self._archive(
+                    call_num, label, prompt, system_prompt, json_schema,
+                    None, f"JSON decode failed: {e}; body[:500]={text[:500]!r}",
+                    elapsed_ms, archive_path,
+                )
+                raise RuntimeError(
+                    f"OpenRouter returned unparseable body ({len(body_bytes)} bytes): {e}"
+                )
         elapsed_ms = int((time.time() - start) * 1000)
 
         if self._interrupted.is_set():
