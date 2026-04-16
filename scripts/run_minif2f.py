@@ -144,6 +144,7 @@ def _run_openprover(
         if used & hf_models:
             cmd.extend(["--provider-url", args.provider_url])
         cmd.append("--isolation" if args.isolation else "--no-isolation")
+        cmd.append("--verifier" if args.verifier else "--no-verifier")
 
         # For Claude models: exit on rate limit so the benchmark can retry
         if used & CLAUDE_MODELS:
@@ -161,7 +162,7 @@ def _run_openprover(
                                         timeout=hard_timeout)
             except subprocess.TimeoutExpired:
                 elapsed = time.monotonic() - start
-                return {"name": name, "status": "not_proved", "elapsed": elapsed,
+                return {"name": name, "status": "error", "elapsed": elapsed,
                         "error": f"hard timeout ({hard_timeout:.0f}s)"}
 
             elapsed = time.monotonic() - start
@@ -335,7 +336,7 @@ def _run_all(
 _RESUME_CARRY_KEYS = (
     "method", "split", "model", "planner_model", "worker_model",
     "max_time", "max_tokens",
-    "informal", "skip", "limit", "repo_path",
+    "informal", "skip", "limit", "repo_path", "verifier",
 )
 # Keys that need to be coerced back to Path on load (config.json stores strings).
 _RESUME_PATH_KEYS = ("repo_path",)
@@ -417,6 +418,9 @@ def main():
                         help="Skip Lean verification (informal only)")
     parser.add_argument("--isolation",
                         action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--verifier",
+                        action=argparse.BooleanOptionalAction, default=True,
+                        help="Run LLM verifier after each worker (default: enabled)")
     parser.add_argument("--name",
                         help="Custom benchmark name (default: auto-generated)")
     parser.add_argument("--resume", type=Path, metavar="DIR", default=None,
@@ -549,6 +553,7 @@ def main():
         "total_problems": len(carried) + len(problems),
         "skip": args.skip,
         "limit": args.limit,
+        "verifier": args.verifier,
     }
     if resume_dir is not None:
         config["resumed_from"] = str(resume_dir)

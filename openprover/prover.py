@@ -14,6 +14,7 @@ from . import prompts
 from .budget import Budget
 from .lean import LeanTheorem, LeanWorkDir, run_lean_check, lean_has_errors, WORKER_TOOLS, execute_worker_tool
 from .llm import Interrupted, LLMClient
+from .llm._base import is_transient_error
 from .tui import TUI
 from .tui._colors import YELLOW, GREEN, RESET as _RESET
 
@@ -194,18 +195,22 @@ class Prover:
                  lean_worker_tools: bool = False,
                  history_budget: int = 0,
                  on_budget_out: str | None = None,
-                 on_rate_limited: str | None = None):
+                 on_rate_limited: str | None = None,
+                 verifier: bool = True):
         self.model = model_name
         self._make_llm = make_llm
         self._make_worker_llm = make_worker_llm or make_llm
         self.lean_items = lean_items
         self.lean_worker_tools = lean_worker_tools
         self._history_budget_override = history_budget
+        self.verifier = verifier
         self.on_budget_out = on_budget_out  # "backoff", "exit", or None
         self.on_rate_limited = on_rate_limited  # "backoff", "exit", or None
         self._spending_limit_hit = False
         self._backoff_delay = 4  # seconds, escalates: 4 → 16 → 64 (stays at 64)
         self._rate_limit_backoff = 4  # separate backoff for --on-rate-limited
+        self._transient_backoff = 4  # backoff for transient errors (timeouts, 5xx)
+        self._consecutive_errors = 0  # consecutive error counter
         self.budget = budget
         self.autonomous = autonomous
         self.verbose = verbose
@@ -374,6 +379,7 @@ class Prover:
             )
             self._maybe_respawn_interrupted_workers()
 
+        MAX_CONSECUTIVE_ERRORS = 10
         while not self.budget.is_exhausted() and not self.shutting_down and not self._spending_limit_hit:
             self.step_num += 1
             self._current_planner_result = ""
@@ -383,6 +389,7 @@ class Prover:
             result = self._do_step()
             # Record history entry if planner produced output
             if self._current_planner_result:
+                self._consecutive_errors = 0
                 self.step_history.append({
                     "step": self.step_num,
                     "planner": self._current_planner_result,
@@ -392,6 +399,14 @@ class Prover:
                 })
                 if len(self.step_history) > 3:
                     self.step_history = self.step_history[-3:]
+            else:
+                self._consecutive_errors += 1
+                if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    self.tui.log(
+                        f"{MAX_CONSECUTIVE_ERRORS} consecutive errors - giving up.",
+                        color="red",
+                    )
+                    break
             self._save_step_history()
             if result == "stop":
                 break
@@ -1308,7 +1323,10 @@ class Prover:
                 self.tui.log("Interrupted - switching to manual mode", color="yellow")
 
         # ── Verifier phase ──
-        verifier_resps = self._run_verifiers(tasks, worker_resps, workers_dir)
+        if self.verifier:
+            verifier_resps = self._run_verifiers(tasks, worker_resps, workers_dir)
+        else:
+            verifier_resps = {}
 
         # Build combined output: merge completed_workers (from prior run)
         # with freshly-spawned worker results.
@@ -2138,19 +2156,37 @@ class Prover:
         return "continue"
 
     def _check_error_policy(self, error: Exception) -> str:
-        """Check both --on-rate-limited and --on-budget-out policies.
+        """Check rate-limit, spending-limit, and transient error policies.
 
         Returns 'stop', 'retry', or 'continue'.
         """
         action = self._check_rate_limited(error)
         if action != "continue":
             return action
-        return self._check_spending_limit(error)
+        action = self._check_spending_limit(error)
+        if action != "continue":
+            return action
+        return self._check_transient(error)
+
+    def _check_transient(self, error: Exception) -> str:
+        """Handle transient errors (timeouts, 502/503/504) with backoff+retry.
+
+        Returns 'retry' (after sleeping) or 'continue'.
+        """
+        if not is_transient_error(error):
+            return "continue"
+        delay = self._transient_backoff
+        self.tui.log(f"Transient error - retrying in {delay}s...", color="yellow")
+        time.sleep(delay)
+        # Escalate: 4 → 8 → 16 → 32 → 60, cap at 60
+        self._transient_backoff = min(delay * 2, 60)
+        return "retry"
 
     def _track_output_tokens(self, resp: dict):
         """Add output tokens from an LLM response to the budget."""
         self._backoff_delay = 4  # reset on success
         self._rate_limit_backoff = 4  # reset on success
+        self._transient_backoff = 4  # reset on success
         tokens = self._extract_token_usage(resp)
         n = tokens["output_tokens"]
         if n > 0:
