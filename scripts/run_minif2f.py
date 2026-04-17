@@ -404,7 +404,7 @@ def main():
                         help="Max parallel workers per openprover step "
                              "(default: 1). Only used with --method openprover.")
 
-    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral", "glm-5"]
+    model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral", "glm-5", "kimi-k2.5"]
     parser.add_argument("--model", default="sonnet", choices=model_choices)
     parser.add_argument("--planner-model", choices=model_choices, default=None)
     parser.add_argument("--worker-model", choices=model_choices, default=None)
