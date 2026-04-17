@@ -22,9 +22,7 @@ class LLMClient:
 
     def __init__(self, model: str, archive_dir: Path,
                  max_output_tokens: int = 128_000,
-                 effort: str | None = None,
-                 anthropic_base_url: str | None = None,
-                 anthropic_auth_token: str | None = None):
+                 effort: str | None = None):
         self.model = model
         self.archive_dir = archive_dir
         self.call_count = 0
@@ -43,10 +41,6 @@ class LLMClient:
         }
         if effort:
             self._env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
-        if anthropic_base_url:
-            self._env["ANTHROPIC_BASE_URL"] = anthropic_base_url
-        if anthropic_auth_token:
-            self._env["ANTHROPIC_AUTH_TOKEN"] = anthropic_auth_token
 
     def interrupt(self):
         """Signal all active LLM calls to stop."""

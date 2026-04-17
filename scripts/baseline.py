@@ -20,7 +20,7 @@ from pathlib import Path
 from openprover.lean.core import (
     LeanTheorem, LeanWorkDir, lean_has_errors, run_lean_check,
 )
-from openprover.llm import LLMClient, MistralClient, OpenRouterClient
+from openprover.llm import LLMClient, GLMClient, MistralClient, OpenRouterClient
 from openprover.llm._base import is_rate_limited_error, is_transient_error
 
 logger = logging.getLogger("baseline")
@@ -33,7 +33,7 @@ OPENROUTER_MODEL_MAP = {
 }
 CLAUDE_MODELS = {"sonnet", "opus"}
 GLM_MODEL_MAP = {"glm-5": "glm-5"}
-GLM_BASE_URL = "https://api.z.ai/api/anthropic"
+GLM_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 RATE_LIMIT_WAIT = 600  # seconds to wait before retrying after rate limit
 
 # Match ```lean ... ``` (or ```lean4 ... ```) markdown code fences.
@@ -263,9 +263,8 @@ def run_baseline(
         if not glm_key:
             print("Error: GLM_API_KEY environment variable not set.", file=sys.stderr)
             sys.exit(1)
-        client = LLMClient(model=GLM_MODEL_MAP[model], archive_dir=archive_dir,
-                           anthropic_base_url=GLM_BASE_URL,
-                           anthropic_auth_token=glm_key)
+        client = GLMClient(model=GLM_MODEL_MAP[model], archive_dir=archive_dir,
+                           api_key=glm_key, base_url=GLM_BASE_URL)
     elif model in OPENROUTER_MODEL_MAP:
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
@@ -410,7 +409,8 @@ def run_baseline(
             # approximate via char count / 4 — works for streaming path
             # which doesn't expose usage).
             usage = (resp.get("raw") or {}).get("usage") or {}
-            turn_tokens = usage.get("completion_tokens")
+            turn_tokens = (usage.get("completion_tokens")
+                          or usage.get("output_tokens"))
             if turn_tokens is None:
                 turn_tokens = (len(assistant_text) + len(thinking_text)) // 4
             tokens += turn_tokens
