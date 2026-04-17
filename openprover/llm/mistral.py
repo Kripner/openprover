@@ -432,11 +432,26 @@ class MistralClient:
                           None, "interrupted", elapsed_ms, archive_path)
             raise Interrupted()
 
-        # Parse outputs
+        # Parse outputs — two entry types:
+        #   "message.output" (role=assistant): thinking + text
+        #   "function.call": structured tool invocation
         result_text = ""
         thinking_text = ""
-        tool_calls = None
+        tool_calls_list: list[dict] = []
         for entry in raw.get("outputs", []):
+            entry_type = entry.get("type", "")
+
+            if entry_type == "function.call":
+                tool_calls_list.append({
+                    "id": entry.get("tool_call_id") or entry.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": entry.get("name", ""),
+                        "arguments": entry.get("arguments", "{}"),
+                    },
+                })
+                continue
+
             if entry.get("role") != "assistant":
                 continue
             content = entry.get("content", "")
@@ -465,8 +480,9 @@ class MistralClient:
                 thinking_text = reasoning
             tc = entry.get("tool_calls")
             if tc:
-                tool_calls = tc
+                tool_calls_list.extend(tc)
 
+        tool_calls = tool_calls_list or None
         self._archive(call_num, label, prompt, system_prompt, json_schema,
                       raw, None, elapsed_ms, archive_path,
                       thinking=thinking_text, result_text=result_text)

@@ -1707,8 +1707,46 @@ class Prover:
         # Leave room for answer + thinking in the context window
         max_input_chars = (ctx_length - answer_reserve) * 4
 
+        MAX_TOOL_TURNS = 12  # cap to prevent context bloat / degeneration
+
         try:
             while True:
+                # Check turn limit
+                if call_idx >= MAX_TOOL_TURNS:
+                    logger.info("[%s] hit %d-turn limit — wrapping up",
+                                worker_id, MAX_TOOL_TURNS)
+                    self.tui.tab_log(worker_id, f"Turn limit ({MAX_TOOL_TURNS}) — wrapping up",
+                                     color="yellow")
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have reached the tool-call limit. "
+                            "Write your FINAL answer now based on what you have so far. "
+                            "Include any code that compiled successfully."
+                        ),
+                    })
+                    self.tui.stream_start("forcing output (turn limit)...", tab=worker_id)
+                    phase2_kwargs = {}
+                    if conversation_id:
+                        phase2_kwargs["conversation_id"] = conversation_id
+                    resp = self.worker_llm.chat(
+                        messages=messages,
+                        tools=None,
+                        max_tokens=answer_reserve,
+                        label=f"{worker_id}_turn_limit",
+                        stream_callback=self._stream_cb(worker_id, output_only=True),
+                        archive_path=(
+                            archive_path.parent / f"{archive_path.stem}_turn_limit.md"
+                            if archive_path else None
+                        ),
+                        **phase2_kwargs,
+                    )
+                    self.tui.stream_end(tab=worker_id)
+                    resp = _use_thinking_as_result(resp)
+                    total_cost += resp["cost"]
+                    total_duration += resp["duration_ms"]
+                    break
+
                 # Check context length before calling the API
                 msg_chars = self._estimate_messages_chars(messages)
                 if msg_chars > max_input_chars:
@@ -1776,12 +1814,8 @@ class Prover:
                     break
 
                 if finish == "tool_calls" and resp.get("tool_calls"):
-                    # Append assistant message with tool calls
-                    assistant_msg = {"role": "assistant", "content": resp["result"] or None}
-                    assistant_msg["tool_calls"] = resp["tool_calls"]
-                    messages.append(assistant_msg)
-
                     # Execute each tool call
+                    tool_results_parts: list[str] = []
                     for tc in resp["tool_calls"]:
                         tool_name = tc["function"]["name"]
                         try:
@@ -1812,12 +1846,24 @@ class Prover:
                             worker_id, tool_name, tool_args,
                             tool_result, tool_status, tool_dur_ms,
                         )
+                        tool_results_parts.append(
+                            f"## {tool_name} result\n\n{tool_result}"
+                        )
 
-                        # Append tool result message
+                    # Append assistant message with tool calls + tool results
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": resp["result"] or None,
+                        "tool_calls": resp["tool_calls"],
+                    }
+                    messages.append(assistant_msg)
+                    for tc, result_part in zip(
+                        resp["tool_calls"], tool_results_parts
+                    ):
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
-                            "content": tool_result,
+                            "content": result_part.split("\n\n", 1)[-1],
                         })
                     continue
 
