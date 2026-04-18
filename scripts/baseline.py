@@ -96,6 +96,11 @@ def _verify(code: str, work_dir: LeanWorkDir, project_dir: Path) -> tuple[bool, 
         success, feedback, _ = run_lean_check(path, project_dir)
     finally:
         path.unlink(missing_ok=True)
+    # Distinguish real errors from warnings-only (Lean exits non-zero for
+    # warnings too).  This matches the logic in prover.py:1154-1157.
+    if not success and feedback:
+        if not lean_has_errors(feedback) and "sorry" not in feedback.lower():
+            success = True
     if success:
         return True, "OK"
     if "sorry" in feedback.lower() and not lean_has_errors(feedback):
