@@ -937,6 +937,17 @@ def parse_planner_toml(text: str) -> list[dict] | ParseError | None:
                     'description = """..."""\n'
                     "</OPENPROVER_ACTION>"
                 )
+        # Normalize items to a list of dicts (same as tasks above).
+        # The model can write `items = ["slug"]` or malformed entries;
+        # downstream code assumes dicts with "slug", "content", etc.
+        if action == "write_items":
+            raw_items = parsed.get("items", [])
+            if isinstance(raw_items, list):
+                parsed["items"] = [
+                    it if isinstance(it, dict) else {"slug": str(it)}
+                    for it in raw_items
+                ]
+
         plans.append(parsed)
 
     return plans

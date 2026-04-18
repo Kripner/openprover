@@ -2108,6 +2108,8 @@ class Prover:
             lines.append(f'read = {json.dumps(plan["read"])}')
         if "items" in plan:
             for item in plan["items"]:
+                if not isinstance(item, dict):
+                    continue
                 lines.append("\n[[items]]")
                 lines.append(f'slug = "{item.get("slug", "")}"')
                 content = item.get("content")
