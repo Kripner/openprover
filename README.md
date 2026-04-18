@@ -4,7 +4,7 @@
 
 Theorem prover powered by language models.
 
-A **planner** coordinates proof search by maintaining a whiteboard and repository, delegating focused tasks to parallel **workers** via Claude CLI or local models (vLLM).
+A **planner** coordinates proof search by maintaining a whiteboard and repository, delegating focused tasks to parallel **workers**. Supports multiple LLM backends: Claude CLI, Mistral (Leanstral), GLM, OpenRouter-hosted models, and local models via vLLM.
 
 ## How it works
 
@@ -12,7 +12,7 @@ You give it a theorem statement (a `.md` file). A planner LLM maintains a **whit
 
 Workers run in parallel (up to `-P` at a time), each focused on a single task. They can reference repository items via `[[wikilinks]]`. Results flow back to the planner, which updates the whiteboard and decides the next step.
 
-With `--lean-project`, workers get access to **lean_verify** (compile Lean 4 code) and **lean_search** (search Mathlib/Lean declarations) tools, enabling interactive formal proof development.
+With `--lean-project`, workers get access to **lean_verify** (compile Lean 4 code), **lean_store** (persist verified snippets across calls), and **lean_search** (search Mathlib/Lean declarations), enabling interactive formal proof development.
 
 Modes:
 - **Interactive** (default): see each step's plan, accept or give feedback
@@ -25,6 +25,8 @@ Modes:
 - Python 3.10+
 - **Claude** (default): [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` command on PATH)
 - **Leanstral** (alternative): Mistral's Lean-specialized model; requires `MISTRAL_API_KEY` (get one at https://console.mistral.ai/)
+- **GLM** (alternative): requires `GLM_API_KEY`
+- **OpenRouter** (alternative): Kimi K2.5, MiniMax M2.5/M2.7; requires `OPENROUTER_API_KEY`
 - **Local models** (alternative): any OpenAI-compatible server such as [vLLM](https://github.com/vllm-project/vllm); pass `--provider-url` to point at it
 
 ## Install
@@ -67,6 +69,15 @@ openprover --theorem examples/cauchy_schwarz.md --planner-model opus --worker-mo
 # Enable web searches (disabled by default)
 openprover --theorem examples/cauchy_schwarz.md --no-isolation
 
+# Use Leanstral (Mistral's Lean-specialized model)
+openprover --theorem examples/cauchy_schwarz.md --model leanstral
+
+# Use GLM-5
+openprover --theorem examples/cauchy_schwarz.md --model glm-5
+
+# Use Kimi K2.5 via OpenRouter
+openprover --theorem examples/cauchy_schwarz.md --model kimi-k2.5
+
 # Use a local model (via vLLM)
 openprover --theorem examples/infinite_primes.md --model minimax-m2.5 --provider-url http://localhost:8000
 
@@ -101,21 +112,25 @@ openprover --theorem examples/addition.md \
 | `--max-tokens` | | Output token budget (mutually exclusive with `--max-time`) |
 | `--conclude-after` | `0.99` | Fraction of budget that triggers conclusion phase (0.9-1.0) |
 | `--autonomous` | off | Run without human confirmation |
-| `-P, --parallelism` | `1` | Max parallel workers per step |
+| `-P, --max-workers` | `1` | Max parallel workers per step |
+| `--verifier` / `--no-verifier` | on | Run LLM verifier after each worker |
+| `--effort` | auto | Claude reasoning effort: `low`, `medium`, `high`, `max` (max for opus, high for others) |
 | `--isolation` / `--no-isolation` | on | Isolation disables web access; use `--no-isolation` to enable `literature_search` |
-| `--give-up-after` | `0.5` | Fraction of budget before give_up is allowed |
+| `--history-budget` | auto | Char budget for planner history context |
+| `--on-budget-out` | `exit` | Action when spending/rate limit hit: `backoff` or `exit` (Claude only) |
+| `--on-rate-limited` | `backoff` | Action on HTTP 429: `backoff` or `exit` |
 | `--lean-project` | | Path to Lean project with lakefile |
 | `--lean-theorem` | | Path to THEOREM.lean (requires `--lean-project`) |
 | `--proof` | | Path to existing PROOF.md (formalize-only mode) |
 | `--lean-items` | auto | Allow saving .lean items to the repo (auto-enabled with `--lean-project`) |
-| `--lean-worker-tools` | auto | Worker tool calls (lean_verify, lean_search) via MCP/vLLM (auto-enabled with `--lean-project` + capable worker) |
+| `--lean-worker-tools` | auto | Worker tool calls (lean_verify, lean_store, lean_search) via MCP/vLLM (auto-enabled with `--lean-project` + capable worker) |
 | `--headless` | off | Non-interactive mode (logs to stdout, implies `--autonomous`) |
 | `--verbose` | off | Show full LLM responses |
 | `--read-only` | off | Inspect run without resuming |
 | `--provider-url` | `http://localhost:8000` | Server URL for local models |
 | `--answer-reserve` | `4096` | Tokens reserved for answer after thinking (local models) |
 
-Available Claude models: `sonnet`, `opus`. Use `leanstral` for Mistral's Lean-specialized model (requires `MISTRAL_API_KEY`). For local models, pass any model name supported by your OpenAI-compatible server (e.g. `minimax-m2.5`) together with `--provider-url`.
+Available models: `sonnet`, `opus` (Claude); `leanstral` (Mistral, requires `MISTRAL_API_KEY`); `glm-5` (requires `GLM_API_KEY`); `kimi-k2.5`, `minimax-m2.5`, `minimax-m2.7` (OpenRouter, requires `OPENROUTER_API_KEY`). For local models, pass any model name supported by your server together with `--provider-url`.
 
 ### TUI controls
 
@@ -170,6 +185,9 @@ python scripts/run_minif2f.py test  --model leanstral --repo-path ./miniF2F --ma
 # PutnamBench
 python scripts/run_putnam.py --repo-path ./PutnamBench --model opus --max-time 2h --problem-parallelism 4
 
+# ProofBench
+python scripts/run_proofbench.py --model leanstral --repo-path ./miniF2F --max-time 10m
+
 # Run a single problem
 python scripts/run_minif2f.py valid --problem mathd_algebra_182 --model leanstral --repo-path ./miniF2F
 ```
@@ -188,8 +206,8 @@ Each step, the planner chooses one action:
 | `write_items` | Create, update, or delete repository items (lean items auto-verified) |
 | `write_whiteboard` | Update the whiteboard without spawning workers |
 | `read_theorem` | Re-read theorem statement(s) and any provided proof |
-| `submit_proof` | Submit proof (informal and/or formal Lean) |
-| `give_up` | Abandon search (only allowed after give-up threshold) |
+| `submit_proof` | Submit informal proof (terminates the session) |
+| `submit_lean_proof` | Submit formal Lean proof (auto-verified with Lean) |
 
 ## Worker tools
 
@@ -198,9 +216,10 @@ When `--lean-project` is set with a tool-capable worker model, workers get acces
 | Tool | Description |
 |------|-------------|
 | `lean_verify(code)` | Compile Lean 4 code via `lake env lean`, returns OK or compiler errors |
-| `lean_search(query)` | Search Mathlib/Lean declarations by natural language query |
+| `lean_store(code)` | Persist a verified snippet; auto-prepended to subsequent `lean_verify` calls |
+| `lean_search(query)` | Search Mathlib/Lean declarations by name or natural language query |
 
-Tools are provided via MCP (Claude workers) or native tool calling (vLLM workers). Actions are shown in the worker tab and can be browsed with arrow keys.
+Tools are provided via MCP (Claude workers) or native tool calling (vLLM/OpenRouter/GLM workers). Actions are shown in the worker tab and can be browsed with arrow keys.
 
 ## Output
 
@@ -214,6 +233,7 @@ runs/<slug>-<timestamp>/
   PROOF.md             - final proof (if found)
   PROOF.lean           - formal Lean proof (if lean mode)
   DISCUSSION.md        - post-session analysis
+  run_config.toml      - saved configuration (for resume)
   repo/                - repository items (lemmas, observations, etc.)
   steps/step_NNN/      - per-step planner decisions and worker results
   archive/calls/       - raw LLM call logs with cost/timing
