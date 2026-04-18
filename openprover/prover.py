@@ -225,6 +225,7 @@ class Prover:
         self.step_num = 0
         self._step_idx = 0
         self.step_history: list[dict] = []  # rolling window of last 3 steps
+        self._steps_since_productive = 0  # steps since last spawn/submit
         self._current_planner_result = ""
         self._current_action_outputs: list[dict] = []
         self.proof_text = ""
@@ -399,6 +400,14 @@ class Prover:
                 })
                 if len(self.step_history) > 3:
                     self.step_history = self.step_history[-3:]
+                # Track steps since last productive action
+                if self._current_step_action in (
+                    "spawn", "submit_proof", "submit_lean_proof",
+                    "literature_search",
+                ):
+                    self._steps_since_productive = 0
+                else:
+                    self._steps_since_productive += 1
             else:
                 self._consecutive_errors += 1
                 if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
@@ -599,6 +608,16 @@ class Prover:
 
         # Build planner prompt
         repo_index = self.repo.list_summaries()
+        intervention = prompts.build_intervention(
+            budget_fraction=self.budget.fraction_spent(),
+            steps_since_productive=self._steps_since_productive,
+        )
+        if intervention:
+            logger.info(
+                "Intervention at step %d (budget=%.0f%%, unproductive=%d)",
+                self.step_num, self.budget.fraction_spent() * 100,
+                self._steps_since_productive,
+            )
         prompt = prompts.format_planner_prompt(
             whiteboard=self.whiteboard,
             repo_index=repo_index,
@@ -610,6 +629,7 @@ class Prover:
             has_proof_md=(self.work_dir / "PROOF.md").exists(),
             has_proof_lean=(self.work_dir / "PROOF.lean").exists(),
             history_budget=self.history_budget,
+            intervention=intervention,
         )
 
         # Planner LLM call (with up to 2 retries on parse failure)
