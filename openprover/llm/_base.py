@@ -33,7 +33,8 @@ def is_transient_error(exc: Exception) -> bool:
 
     Covers request timeouts from upstream gateways (notably Z.ai's Anthropic
     bridge for GLM, which sporadically returns exit-1 with
-    `result: "Request timed out"`) and common 5xx gateway errors.
+    `result: "Request timed out"`), common 5xx gateway errors, and HTTP
+    chunked-transfer failures (IncompleteRead, RemoteDisconnected).
     """
     msg = str(exc).lower()
     if any(code in msg for code in ("502", "503", "504")):
@@ -43,6 +44,9 @@ def is_transient_error(exc: Exception) -> bool:
             or "read timed out" in msg
             or "connection reset" in msg
             or "connection aborted" in msg
+            or "incompleteread" in msg
+            or ("chunked" in msg and "read" in msg)
+            or "remotedisconnected" in msg
             or ("gateway" in msg and "time" in msg))
 
 

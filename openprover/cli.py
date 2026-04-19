@@ -11,7 +11,7 @@ from pathlib import Path
 
 from openprover import __version__
 from .budget import Budget, parse_duration
-from .llm import LLMClient, HFClient, MistralClient, OpenRouterClient
+from .llm import LLMClient, GLMClient, HFClient, MistralClient, OpenRouterClient
 from .prover import Prover, slugify
 from .tui import TUI, HeadlessTUI
 
@@ -32,7 +32,8 @@ def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
                      isolation: bool, autonomous: bool, mode: str,
                      lean_project_dir: Path | None, lean_items: bool,
                      lean_worker_tools: bool, provider_url: str,
-                     answer_reserve: int, history_budget: int):
+                     answer_reserve: int, history_budget: int,
+                     verifier: bool):
     """Save run configuration so it can be restored on resume."""
     lines = [
         f'version = "{__version__}"',
@@ -51,6 +52,7 @@ def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
         f'provider_url = "{provider_url}"',
         f'answer_reserve = {answer_reserve}',
         f'history_budget = {history_budget}',
+        f'verifier = {str(verifier).lower()}',
     ]
     (work_dir / RUN_CONFIG_FILE).write_text("\n".join(lines) + "\n")
 
@@ -244,6 +246,8 @@ def _cmd_prove():
     parser.add_argument("--read-only", action="store_true", help="Inspect run without resuming")
     parser.add_argument("--isolation", action=argparse.BooleanOptionalAction, default=True, help="Disable web searches (no literature_search action)")
     parser.add_argument("-P", "--max-workers", type=int, default=1, help="Max parallel workers per spawn step (default: 1)")
+    parser.add_argument("--verifier", action=argparse.BooleanOptionalAction, default=True,
+                        help="Run LLM verifier after each worker (default: enabled)")
     parser.add_argument("--answer-reserve", type=int, default=4096, metavar="TOKENS", help="Tokens reserved for answer after thinking (default: 4096)")
     parser.add_argument("--history-budget", type=int, default=0, metavar="CHARS", help="Char budget for planner history (default: auto from model context)")
     parser.add_argument("--effort", choices=["low", "medium", "high", "max"], default=None,
@@ -295,13 +299,12 @@ def _cmd_prove():
     MISTRAL_MODEL_MAP = {
         "leanstral": "labs-leanstral-2603",
     }
-    # GLM models reach the Claude CLI through Z.ai's Anthropic-compatible
-    # gateway (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN).  Auth uses the
-    # subscription key from $GLM_API_KEY.
+    # GLM models use Z.ai's native OpenAI-compatible API for accurate
+    # token usage reporting.  Auth uses the subscription key from $GLM_API_KEY.
     GLM_MODEL_MAP = {
         "glm-5": "glm-5",
     }
-    GLM_BASE_URL = "https://api.z.ai/api/anthropic"
+    GLM_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
     # OpenRouter hosts several models under an OpenAI-compatible API.
     OPENROUTER_MODEL_MAP = {
         "kimi-k2.5": "moonshotai/kimi-k2.5",
@@ -361,6 +364,8 @@ def _cmd_prove():
                 args.answer_reserve = saved.get("answer_reserve", args.answer_reserve)
             if not _cli_flag_given("--history-budget"):
                 args.history_budget = saved.get("history_budget", args.history_budget)
+            if not _cli_flag_given("--verifier", "--no-verifier"):
+                args.verifier = saved.get("verifier", args.verifier)
 
     # Lean flag validation (for fresh starts with explicit flags)
     if not resuming:
@@ -457,9 +462,10 @@ def _cmd_prove():
             glm_key = os.environ.get("GLM_API_KEY")
             if not glm_key:
                 parser.error("GLM_API_KEY environment variable not set (required for glm-* models)")
-            return LLMClient(GLM_MODEL_MAP[model_alias], archive_dir,
-                             anthropic_base_url=GLM_BASE_URL,
-                             anthropic_auth_token=glm_key)
+            return GLMClient(GLM_MODEL_MAP[model_alias], archive_dir,
+                             api_key=glm_key,
+                             base_url=GLM_BASE_URL,
+                             answer_reserve=args.answer_reserve)
         if model_alias in OPENROUTER_MODEL_MAP:
             or_key = os.environ.get("OPENROUTER_API_KEY")
             if not or_key:
@@ -521,6 +527,7 @@ def _cmd_prove():
             provider_url=args.provider_url,
             answer_reserve=args.answer_reserve,
             history_budget=args.history_budget,
+            verifier=args.verifier,
         )
 
     prover = Prover(
@@ -545,6 +552,7 @@ def _cmd_prove():
         history_budget=args.history_budget,
         on_budget_out=args.on_budget_out,
         on_rate_limited=args.on_rate_limited,
+        verifier=args.verifier,
     )
 
     # Clear the early status line before TUI takes over

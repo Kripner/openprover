@@ -1,8 +1,16 @@
 """Lean Explore data management - fetch and check local search data."""
 
+import logging
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger("openprover.lean")
+
+# Minimum declaration count for a valid database.  A proper Mathlib index
+# has ~400k declarations; anything below this threshold is likely a corrupt
+# or incomplete fetch (e.g. only FormalConjectures/PhysLean packages).
+_MIN_DECLARATIONS = 100_000
 
 
 def _has_lean_explore() -> bool:
@@ -22,6 +30,37 @@ def _has_torch() -> bool:
         return False
 
 
+def _validate_db(db_path: Path) -> bool:
+    """Check the DB has enough declarations and includes Mathlib."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM declarations")
+        total = cur.fetchone()[0]
+        if total < _MIN_DECLARATIONS:
+            logger.warning(
+                "lean_explore DB has only %d declarations (need >=%d): %s",
+                total, _MIN_DECLARATIONS, db_path,
+            )
+            conn.close()
+            return False
+        cur.execute(
+            "SELECT COUNT(*) FROM declarations WHERE module LIKE 'Mathlib.%'"
+        )
+        mathlib_count = cur.fetchone()[0]
+        conn.close()
+        if mathlib_count == 0:
+            logger.warning(
+                "lean_explore DB has 0 Mathlib declarations: %s", db_path,
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.warning("lean_explore DB validation failed: %s", e)
+        return False
+
+
 def is_lean_data_available() -> bool:
     """Check if Lean Explore search data has been fetched and deps installed."""
     if not _has_lean_explore() or not _has_torch():
@@ -36,7 +75,7 @@ def is_lean_data_available() -> bool:
         for version_dir in cache.iterdir():
             if version_dir.is_dir():
                 db = version_dir / "lean_explore.db"
-                if db.exists():
+                if db.exists() and _validate_db(db):
                     return True
         return False
     except Exception:
@@ -93,7 +132,9 @@ def fetch_lean_data() -> bool:
             check=True,
         )
         if not is_lean_data_available():
-            print("Warning: fetch completed but data files not found.")
+            print("Warning: fetch completed but data validation failed "
+                  "(too few declarations or missing Mathlib). "
+                  "Check logs or try an older lean-explore data version.")
             return False
     except subprocess.CalledProcessError as e:
         print(f"Error fetching Lean Explore data: {e}")

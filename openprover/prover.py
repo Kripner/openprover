@@ -14,6 +14,7 @@ from . import prompts
 from .budget import Budget
 from .lean import LeanTheorem, LeanWorkDir, run_lean_check, lean_has_errors, WORKER_TOOLS, execute_worker_tool
 from .llm import Interrupted, LLMClient
+from .llm._base import is_transient_error
 from .tui import TUI
 from .tui._colors import YELLOW, GREEN, RESET as _RESET
 
@@ -194,18 +195,22 @@ class Prover:
                  lean_worker_tools: bool = False,
                  history_budget: int = 0,
                  on_budget_out: str | None = None,
-                 on_rate_limited: str | None = None):
+                 on_rate_limited: str | None = None,
+                 verifier: bool = True):
         self.model = model_name
         self._make_llm = make_llm
         self._make_worker_llm = make_worker_llm or make_llm
         self.lean_items = lean_items
         self.lean_worker_tools = lean_worker_tools
         self._history_budget_override = history_budget
+        self.verifier = verifier
         self.on_budget_out = on_budget_out  # "backoff", "exit", or None
         self.on_rate_limited = on_rate_limited  # "backoff", "exit", or None
         self._spending_limit_hit = False
         self._backoff_delay = 4  # seconds, escalates: 4 → 16 → 64 (stays at 64)
         self._rate_limit_backoff = 4  # separate backoff for --on-rate-limited
+        self._transient_backoff = 4  # backoff for transient errors (timeouts, 5xx)
+        self._consecutive_errors = 0  # consecutive error counter
         self.budget = budget
         self.autonomous = autonomous
         self.verbose = verbose
@@ -220,6 +225,7 @@ class Prover:
         self.step_num = 0
         self._step_idx = 0
         self.step_history: list[dict] = []  # rolling window of last 3 steps
+        self._steps_since_productive = 0  # steps since last spawn/submit
         self._current_planner_result = ""
         self._current_action_outputs: list[dict] = []
         self.proof_text = ""
@@ -374,6 +380,7 @@ class Prover:
             )
             self._maybe_respawn_interrupted_workers()
 
+        MAX_CONSECUTIVE_ERRORS = 10
         while not self.budget.is_exhausted() and not self.shutting_down and not self._spending_limit_hit:
             self.step_num += 1
             self._current_planner_result = ""
@@ -383,6 +390,7 @@ class Prover:
             result = self._do_step()
             # Record history entry if planner produced output
             if self._current_planner_result:
+                self._consecutive_errors = 0
                 self.step_history.append({
                     "step": self.step_num,
                     "planner": self._current_planner_result,
@@ -392,6 +400,22 @@ class Prover:
                 })
                 if len(self.step_history) > 3:
                     self.step_history = self.step_history[-3:]
+                # Track steps since last productive action
+                if self._current_step_action in (
+                    "spawn", "submit_proof", "submit_lean_proof",
+                    "literature_search",
+                ):
+                    self._steps_since_productive = 0
+                else:
+                    self._steps_since_productive += 1
+            else:
+                self._consecutive_errors += 1
+                if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    self.tui.log(
+                        f"{MAX_CONSECUTIVE_ERRORS} consecutive errors - giving up.",
+                        color="red",
+                    )
+                    break
             self._save_step_history()
             if result == "stop":
                 break
@@ -584,6 +608,16 @@ class Prover:
 
         # Build planner prompt
         repo_index = self.repo.list_summaries()
+        intervention = prompts.build_intervention(
+            budget_fraction=self.budget.fraction_spent(),
+            steps_since_productive=self._steps_since_productive,
+        )
+        if intervention:
+            logger.info(
+                "Intervention at step %d (budget=%.0f%%, unproductive=%d)",
+                self.step_num, self.budget.fraction_spent() * 100,
+                self._steps_since_productive,
+            )
         prompt = prompts.format_planner_prompt(
             whiteboard=self.whiteboard,
             repo_index=repo_index,
@@ -595,6 +629,7 @@ class Prover:
             has_proof_md=(self.work_dir / "PROOF.md").exists(),
             has_proof_lean=(self.work_dir / "PROOF.lean").exists(),
             history_budget=self.history_budget,
+            intervention=intervention,
         )
 
         # Planner LLM call (with up to 2 retries on parse failure)
@@ -1308,7 +1343,10 @@ class Prover:
                 self.tui.log("Interrupted - switching to manual mode", color="yellow")
 
         # ── Verifier phase ──
-        verifier_resps = self._run_verifiers(tasks, worker_resps, workers_dir)
+        if self.verifier:
+            verifier_resps = self._run_verifiers(tasks, worker_resps, workers_dir)
+        else:
+            verifier_resps = {}
 
         # Build combined output: merge completed_workers (from prior run)
         # with freshly-spawned worker results.
@@ -1689,8 +1727,46 @@ class Prover:
         # Leave room for answer + thinking in the context window
         max_input_chars = (ctx_length - answer_reserve) * 4
 
+        MAX_TOOL_TURNS = 12  # cap to prevent context bloat / degeneration
+
         try:
             while True:
+                # Check turn limit
+                if call_idx >= MAX_TOOL_TURNS:
+                    logger.info("[%s] hit %d-turn limit — wrapping up",
+                                worker_id, MAX_TOOL_TURNS)
+                    self.tui.tab_log(worker_id, f"Turn limit ({MAX_TOOL_TURNS}) — wrapping up",
+                                     color="yellow")
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have reached the tool-call limit. "
+                            "Write your FINAL answer now based on what you have so far. "
+                            "Include any code that compiled successfully."
+                        ),
+                    })
+                    self.tui.stream_start("forcing output (turn limit)...", tab=worker_id)
+                    phase2_kwargs = {}
+                    if conversation_id:
+                        phase2_kwargs["conversation_id"] = conversation_id
+                    resp = self.worker_llm.chat(
+                        messages=messages,
+                        tools=None,
+                        max_tokens=answer_reserve,
+                        label=f"{worker_id}_turn_limit",
+                        stream_callback=self._stream_cb(worker_id, output_only=True),
+                        archive_path=(
+                            archive_path.parent / f"{archive_path.stem}_turn_limit.md"
+                            if archive_path else None
+                        ),
+                        **phase2_kwargs,
+                    )
+                    self.tui.stream_end(tab=worker_id)
+                    resp = _use_thinking_as_result(resp)
+                    total_cost += resp["cost"]
+                    total_duration += resp["duration_ms"]
+                    break
+
                 # Check context length before calling the API
                 msg_chars = self._estimate_messages_chars(messages)
                 if msg_chars > max_input_chars:
@@ -1758,12 +1834,8 @@ class Prover:
                     break
 
                 if finish == "tool_calls" and resp.get("tool_calls"):
-                    # Append assistant message with tool calls
-                    assistant_msg = {"role": "assistant", "content": resp["result"] or None}
-                    assistant_msg["tool_calls"] = resp["tool_calls"]
-                    messages.append(assistant_msg)
-
                     # Execute each tool call
+                    tool_results_parts: list[str] = []
                     for tc in resp["tool_calls"]:
                         tool_name = tc["function"]["name"]
                         try:
@@ -1794,12 +1866,24 @@ class Prover:
                             worker_id, tool_name, tool_args,
                             tool_result, tool_status, tool_dur_ms,
                         )
+                        tool_results_parts.append(
+                            f"## {tool_name} result\n\n{tool_result}"
+                        )
 
-                        # Append tool result message
+                    # Append assistant message with tool calls + tool results
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": resp["result"] or None,
+                        "tool_calls": resp["tool_calls"],
+                    }
+                    messages.append(assistant_msg)
+                    for tc, result_part in zip(
+                        resp["tool_calls"], tool_results_parts
+                    ):
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
-                            "content": tool_result,
+                            "content": result_part.split("\n\n", 1)[-1],
                         })
                     continue
 
@@ -2044,6 +2128,8 @@ class Prover:
             lines.append(f'read = {json.dumps(plan["read"])}')
         if "items" in plan:
             for item in plan["items"]:
+                if not isinstance(item, dict):
+                    continue
                 lines.append("\n[[items]]")
                 lines.append(f'slug = "{item.get("slug", "")}"')
                 content = item.get("content")
@@ -2138,19 +2224,37 @@ class Prover:
         return "continue"
 
     def _check_error_policy(self, error: Exception) -> str:
-        """Check both --on-rate-limited and --on-budget-out policies.
+        """Check rate-limit, spending-limit, and transient error policies.
 
         Returns 'stop', 'retry', or 'continue'.
         """
         action = self._check_rate_limited(error)
         if action != "continue":
             return action
-        return self._check_spending_limit(error)
+        action = self._check_spending_limit(error)
+        if action != "continue":
+            return action
+        return self._check_transient(error)
+
+    def _check_transient(self, error: Exception) -> str:
+        """Handle transient errors (timeouts, 502/503/504) with backoff+retry.
+
+        Returns 'retry' (after sleeping) or 'continue'.
+        """
+        if not is_transient_error(error):
+            return "continue"
+        delay = self._transient_backoff
+        self.tui.log(f"Transient error - retrying in {delay}s...", color="yellow")
+        time.sleep(delay)
+        # Escalate: 4 → 8 → 16 → 32 → 60, cap at 60
+        self._transient_backoff = min(delay * 2, 60)
+        return "retry"
 
     def _track_output_tokens(self, resp: dict):
         """Add output tokens from an LLM response to the budget."""
         self._backoff_delay = 4  # reset on success
         self._rate_limit_backoff = 4  # reset on success
+        self._transient_backoff = 4  # reset on success
         tokens = self._extract_token_usage(resp)
         n = tokens["output_tokens"]
         if n > 0:

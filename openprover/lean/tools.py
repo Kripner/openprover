@@ -175,6 +175,22 @@ def _tool_lean_store(
     return (f"OK - stored.\n\nCurrent store:\n```lean\n{candidate}\n```", "ok")
 
 
+# Track consecutive empty results per worker to detect broken databases
+_empty_search_counts: dict[str, int] = {}
+_EMPTY_SEARCH_WARN_THRESHOLD = 3
+
+
+def _log_empty_search_warning(worker_id: str, query: str) -> None:
+    count = _empty_search_counts.get(worker_id, 0) + 1
+    _empty_search_counts[worker_id] = count
+    if count == _EMPTY_SEARCH_WARN_THRESHOLD:
+        logger.warning(
+            "[%s] lean_search returned 0 results for %d consecutive queries "
+            "(last: %r) — the search database may be corrupt or incomplete",
+            worker_id, count, query,
+        )
+
+
 def _tool_lean_search(
     args: dict,
     worker_id: str,
@@ -202,7 +218,9 @@ def _tool_lean_search(
         logger.info("[%s] lean_search query=%r returned %d results in %.1fs",
                     worker_id, query, len(results), elapsed)
         if not results:
+            _log_empty_search_warning(worker_id, query)
             return ("No results found", "ok")
+        _empty_search_counts.pop(worker_id, None)
         parts = []
         for r in results:
             name = getattr(r, 'name', '')

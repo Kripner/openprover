@@ -618,6 +618,7 @@ def format_planner_prompt(
     has_proof_md: bool = False,
     has_proof_lean: bool = False,
     history_budget: int = 0,
+    intervention: str = "",
 ) -> str:
     def heading(title):
         bar = "=" * (len(title) + 2)
@@ -680,8 +681,53 @@ def format_planner_prompt(
                 if a_summary:
                     label += f" - {a_summary}"
                 parts.append(f"\n\n# {label}\n\n<action_output>\n{text}\n</action_output>")
+    if intervention:
+        parts.append(f"\n\n**IMPORTANT**\n{intervention}")
     parts.append(f"\nMax {max_workers} worker(s) per spawn. What's the most productive next move?")
     return "".join(parts)
+
+
+def build_intervention(
+    *,
+    budget_fraction: float,
+    steps_since_productive: int,
+) -> str:
+    """Build intervention text for the planner prompt, or '' if none needed.
+
+    Fires on two conditions:
+    - Loop detection: consecutive steps without spawn/submit (3 = soft, 5 = strong)
+    - Budget pressure: >80% spent = wrap up, >95% = urgent submit
+    """
+    parts: list[str] = []
+
+    if steps_since_productive >= 5:
+        parts.append(
+            f"You have taken {steps_since_productive} consecutive steps without "
+            f"spawning a worker or submitting a proof. You appear to be stuck in a "
+            f"read/write loop. STOP reading and take a decisive action: either "
+            f"spawn a worker to attempt a proof, or submit your best proof now."
+        )
+    elif steps_since_productive >= 3:
+        parts.append(
+            f"You have taken {steps_since_productive} consecutive steps without "
+            f"spawning a worker or submitting a proof. Consider whether you are "
+            f"making real progress or just shuffling items. Prioritize spawning "
+            f"workers or submitting."
+        )
+
+    if budget_fraction >= 0.95:
+        parts.append(
+            "CRITICAL: Less than 5% of your budget remains. You MUST submit your "
+            "best proof NOW using submit_proof (or submit_lean_proof). Do not "
+            "spend any more budget on exploration."
+        )
+    elif budget_fraction >= 0.80:
+        parts.append(
+            "Budget is running low (>80% spent). If you have any proof draft, "
+            "submit it now — an imperfect submission is better than no submission."
+        )
+
+    return "\n\n".join(parts)
 
 
 def format_worker_prompt(task_description: str, resolved_refs: str) -> str:
@@ -937,6 +983,17 @@ def parse_planner_toml(text: str) -> list[dict] | ParseError | None:
                     'description = """..."""\n'
                     "</OPENPROVER_ACTION>"
                 )
+        # Normalize items to a list of dicts (same as tasks above).
+        # The model can write `items = ["slug"]` or malformed entries;
+        # downstream code assumes dicts with "slug", "content", etc.
+        if action == "write_items":
+            raw_items = parsed.get("items", [])
+            if isinstance(raw_items, list):
+                parsed["items"] = [
+                    it if isinstance(it, dict) else {"slug": str(it)}
+                    for it in raw_items
+                ]
+
         plans.append(parsed)
 
     return plans
