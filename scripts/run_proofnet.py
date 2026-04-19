@@ -106,7 +106,14 @@ def _theorem_lean_text(info: dict[str, str]) -> str:
     append `by\n  sorry` to give openprover the same `:= by sorry` shape
     it gets for MiniF2F problems.
     """
-    return f"{info['header']}{info['formal']} by\n  sorry\n"
+    # Some JSONL `header` entries start with `open ...` without `import
+    # Mathlib` because in upstream ProofnetValid.lean the import sits at
+    # the top of the file. Extracted as a standalone file, that breaks
+    # every baseline verification with "unknown namespace Topology".
+    header = info["header"]
+    if "import Mathlib" not in header:
+        header = "import Mathlib\n\n" + header
+    return f"{header}{info['formal']} by\n  sorry\n"
 
 
 # ── OpenProver runner ────────────────────────────────────────────────
