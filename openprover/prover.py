@@ -1,5 +1,6 @@
 """Core proving loop for OpenProver - planner/worker architecture."""
 
+import errno
 import json
 import logging
 import re
@@ -1189,13 +1190,29 @@ class Prover:
                 continue
 
             try:
-                self._handle_write_item(item, slug, content, fmt, step_dir,
+                self._handle_write_item(slug, content, fmt, step_dir,
                                         lean_idx, lean_feedback)
                 if fmt == "lean" and content and self.lean_work_dir:
                     lean_idx += 1
-            except (OSError, ValueError) as e:
+            except OSError as e:
+                # Only swallow errors caused by malformed slug input; let
+                # system-level failures (disk full, quota, I/O, permissions,
+                # read-only FS) propagate — those are not the model's fault
+                # and should fail loudly.
+                if e.errno not in (errno.ENAMETOOLONG, errno.EINVAL):
+                    raise
                 self.tui.log(f"[[{slug}]]: error writing item: {e}", color="red")
-                logger.exception("write_item failed for slug=%r", slug)
+                logger.info("Rejected write_item: %s: %s", type(e).__name__, e)
+                lean_feedback.append(
+                    f"[[{slug}]]: Rejected - {type(e).__name__}: {e}. "
+                    f"The item was NOT saved."
+                )
+            except ValueError as e:
+                # pathlib/os raise ValueError for things like embedded null
+                # bytes — unambiguously bad slug input, safe to surface to
+                # the model as feedback.
+                self.tui.log(f"[[{slug}]]: error writing item: {e}", color="red")
+                logger.info("Rejected write_item: %s: %s", type(e).__name__, e)
                 lean_feedback.append(
                     f"[[{slug}]]: Rejected - {type(e).__name__}: {e}. "
                     f"The item was NOT saved."
@@ -1206,7 +1223,7 @@ class Prover:
                 "## Lean Verification Results\n\n" + "\n\n".join(lean_feedback)
             )
 
-    def _handle_write_item(self, item: dict, slug: str, content,
+    def _handle_write_item(self, slug: str, content,
                            fmt: str, step_dir: Path,
                            lean_idx: int, lean_feedback: list):
         """Process a single write_items entry. Appends to lean_feedback."""
