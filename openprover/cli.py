@@ -616,5 +616,8 @@ def _cmd_prove():
                 print("[result] proved")
             elif prover._spending_limit_hit:
                 print("[result] rate_limited")
+            elif prover._llm_error_exit:
+                msg = (prover._last_error_msg or "").splitlines()[0][:200]
+                print(f"[result] error: LLM errors — {msg}")
             else:
                 print("[result] not_proved")

@@ -199,6 +199,11 @@ def _run_openprover(
                 time.sleep(RATE_LIMIT_WAIT)
                 continue  # retry the same problem
 
+            for line in result.stdout.splitlines():
+                if line.startswith("[result] error"):
+                    err = line[len("[result] error"):].lstrip(": ").strip() or "openprover exited with LLM errors"
+                    return {"name": name, "status": "error", "elapsed": elapsed, "error": err}
+
             status = "proved" if "[result] proved" in result.stdout else "not_proved"
             return {"name": name, "status": status, "elapsed": elapsed, "error": ""}
 

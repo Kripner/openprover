@@ -211,6 +211,8 @@ class Prover:
         self._rate_limit_backoff = 4  # separate backoff for --on-rate-limited
         self._transient_backoff = 4  # backoff for transient errors (timeouts, 5xx)
         self._consecutive_errors = 0  # consecutive error counter
+        self._llm_error_exit = False  # set when giving up on MAX_CONSECUTIVE_ERRORS
+        self._last_error_msg = ""  # most recent error, for reporting on llm_error_exit
         self.budget = budget
         self.autonomous = autonomous
         self.verbose = verbose
@@ -415,6 +417,7 @@ class Prover:
                         f"{MAX_CONSECUTIVE_ERRORS} consecutive errors - giving up.",
                         color="red",
                     )
+                    self._llm_error_exit = True
                     break
             self._save_step_history()
             if result == "stop":
@@ -675,6 +678,7 @@ class Prover:
                     self.tui.stream_end(tab="planner")
                     logger.error("Planner error: %s", e)
                     self.tui.log(f"Error: {e}", color="red")
+                    self._last_error_msg = str(e)
                     action = self._check_error_policy(e)
                     if action == "retry":
                         continue
