@@ -1137,6 +1137,22 @@ class Prover:
         self._push_output(self.repo.read_items(slugs))
         self.tui.log(f"Read {len(slugs)} item(s): {', '.join(slugs)}", dim=True)
 
+    _SLUG_MAX_LEN = 100
+
+    @staticmethod
+    def _validate_slug(slug: str) -> str | None:
+        """Return None if valid, else a human-readable rejection reason."""
+        if len(slug) > Prover._SLUG_MAX_LEN:
+            return (f"slug too long ({len(slug)} chars, max "
+                    f"{Prover._SLUG_MAX_LEN}); use a short identifier, "
+                    f"not the item's content")
+        if any(c in slug for c in "\n\r\t\x00"):
+            return "slug contains newline/tab/null characters"
+        parts = slug.split("/")
+        if any(p in ("", ".", "..") for p in parts):
+            return "slug contains empty, '.' or '..' path components"
+        return None
+
     def _handle_write_items(self, plan: dict, step_dir: Path):
         items = plan.get("items", [])
         if not items:
@@ -1149,6 +1165,18 @@ class Prover:
             slug = item.get("slug", "")
             if not slug:
                 continue
+            # Validate slug: must be a short, well-formed identifier
+            reason = self._validate_slug(slug)
+            if reason:
+                preview = slug[:60].replace("\n", "\\n")
+                self.tui.log(f"Rejecting slug '{preview}...': {reason}", color="red")
+                logger.info("Rejected write_item slug: %s", reason)
+                lean_feedback.append(
+                    f"[[{preview}...]]: Rejected - {reason}. "
+                    f"Slugs must be short identifiers (e.g. 'helpers/compact-trick'), "
+                    f"not the item's content."
+                )
+                continue
             content = item.get("content")
             fmt = item.get("format", "markdown")
 
@@ -1160,61 +1188,77 @@ class Prover:
                 )
                 continue
 
-            if fmt == "lean" and content and self.lean_work_dir:
-                path = self.lean_work_dir.make_file(slug, content)
-                self.tui.log(f"Verifying [[{slug}]]...", dim=True)
-                success, feedback, cmd_info = run_lean_check(path, self.lean_project_dir)
-
-                lean_dir = step_dir / "lean"
-                lean_dir.mkdir(exist_ok=True)
-                flat_slug = slug.replace("/", "_")
-                (lean_dir / f"item_{lean_idx}_{flat_slug}.lean").write_text(content)
-                (lean_dir / f"result_{lean_idx}_{flat_slug}.txt").write_text(
-                    "OK" if success else feedback)
-                (lean_dir / f"cmd_{lean_idx}_{flat_slug}.txt").write_text(cmd_info)
-                lean_idx += 1
-
-                # Distinguish real errors from warnings-only
-                if not success and feedback:
-                    if not lean_has_errors(feedback) and "sorry" not in feedback.lower():
-                        # Warnings only, no errors - treat as success
-                        success = True
-
-                if success:
-                    self.repo.write_item(slug, content, fmt="lean")
-                    if feedback:
-                        self.tui.log(f"Wrote [[{slug}]] (lean, warnings only)",
-                                     color="green")
-                        logger.info("Lean item [[%s]] verified with warnings", slug)
-                        lean_feedback.append(
-                            f"[[{slug}]]: Lean verification PASSED (with warnings)"
-                            f"\n```\n{feedback}\n```"
-                        )
-                    else:
-                        self.tui.log(f"Wrote [[{slug}]] (lean, verified OK)",
-                                     color="green")
-                        logger.info("Lean item [[%s]] verified OK", slug)
-                        lean_feedback.append(f"[[{slug}]]: Lean verification PASSED")
-                else:
-                    self.tui.log(f"[[{slug}]] lean verification failed - not saved",
-                                 color="yellow")
-                    logger.info("Lean item [[%s]] failed verification - not saved", slug)
-                    lean_feedback.append(
-                        f"[[{slug}]]: Lean verification FAILED - item was NOT saved "
-                        f"to the repo.\n```\n{feedback}\n```"
-                    )
-            elif not content:
-                self.repo.write_item(slug, content)
-                self.tui.log(f"Deleted [[{slug}]]", color="yellow")
-            else:
-                self.repo.write_item(slug, content)
-                first_line = content.split("\n", 1)[0]
-                self.tui.log(f"Wrote [[{slug}]]: {first_line}", color="green")
+            try:
+                self._handle_write_item(item, slug, content, fmt, step_dir,
+                                        lean_idx, lean_feedback)
+                if fmt == "lean" and content and self.lean_work_dir:
+                    lean_idx += 1
+            except (OSError, ValueError) as e:
+                self.tui.log(f"[[{slug}]]: error writing item: {e}", color="red")
+                logger.exception("write_item failed for slug=%r", slug)
+                lean_feedback.append(
+                    f"[[{slug}]]: Rejected - {type(e).__name__}: {e}. "
+                    f"The item was NOT saved."
+                )
 
         if lean_feedback:
             self._push_output(
                 "## Lean Verification Results\n\n" + "\n\n".join(lean_feedback)
             )
+
+    def _handle_write_item(self, item: dict, slug: str, content,
+                           fmt: str, step_dir: Path,
+                           lean_idx: int, lean_feedback: list):
+        """Process a single write_items entry. Appends to lean_feedback."""
+        if fmt == "lean" and content and self.lean_work_dir:
+            path = self.lean_work_dir.make_file(slug, content)
+            self.tui.log(f"Verifying [[{slug}]]...", dim=True)
+            success, feedback, cmd_info = run_lean_check(path, self.lean_project_dir)
+
+            lean_dir = step_dir / "lean"
+            lean_dir.mkdir(exist_ok=True)
+            flat_slug = slug.replace("/", "_")
+            (lean_dir / f"item_{lean_idx}_{flat_slug}.lean").write_text(content)
+            (lean_dir / f"result_{lean_idx}_{flat_slug}.txt").write_text(
+                "OK" if success else feedback)
+            (lean_dir / f"cmd_{lean_idx}_{flat_slug}.txt").write_text(cmd_info)
+
+            # Distinguish real errors from warnings-only
+            if not success and feedback:
+                if not lean_has_errors(feedback) and "sorry" not in feedback.lower():
+                    # Warnings only, no errors - treat as success
+                    success = True
+
+            if success:
+                self.repo.write_item(slug, content, fmt="lean")
+                if feedback:
+                    self.tui.log(f"Wrote [[{slug}]] (lean, warnings only)",
+                                 color="green")
+                    logger.info("Lean item [[%s]] verified with warnings", slug)
+                    lean_feedback.append(
+                        f"[[{slug}]]: Lean verification PASSED (with warnings)"
+                        f"\n```\n{feedback}\n```"
+                    )
+                else:
+                    self.tui.log(f"Wrote [[{slug}]] (lean, verified OK)",
+                                 color="green")
+                    logger.info("Lean item [[%s]] verified OK", slug)
+                    lean_feedback.append(f"[[{slug}]]: Lean verification PASSED")
+            else:
+                self.tui.log(f"[[{slug}]] lean verification failed - not saved",
+                             color="yellow")
+                logger.info("Lean item [[%s]] failed verification - not saved", slug)
+                lean_feedback.append(
+                    f"[[{slug}]]: Lean verification FAILED - item was NOT saved "
+                    f"to the repo.\n```\n{feedback}\n```"
+                )
+        elif not content:
+            self.repo.write_item(slug, content)
+            self.tui.log(f"Deleted [[{slug}]]", color="yellow")
+        else:
+            self.repo.write_item(slug, content)
+            first_line = content.split("\n", 1)[0]
+            self.tui.log(f"Wrote [[{slug}]]: {first_line}", color="green")
 
     def _handle_read_theorem(self):
         parts = [f"## THEOREM.md\n\n{self.theorem_text}"]
