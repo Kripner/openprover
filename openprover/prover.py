@@ -1049,8 +1049,6 @@ class Prover:
 
         return self._check_completion(feedback)
 
-    _LEAN_IDENT = r"[a-zA-Z_][a-zA-Z0-9_']*"
-
     @staticmethod
     def _strip_lean_comments(text: str) -> str:
         """Strip Lean line comments (`-- …`) and block comments (`/- … -/`)."""
@@ -1059,48 +1057,107 @@ class Prover:
         return text
 
     @staticmethod
-    def _extract_expected_theorem_names(theorem_text: str) -> list[str]:
-        """Return the names of theorems/lemmas/defs declared in THEOREM.lean.
+    def _normalize_lean(text: str) -> str:
+        """Strip comments and collapse whitespace runs to single spaces.
 
-        These are the names the submitted proof MUST re-declare so that
-        it actually proves the benchmark task (and not some other theorem
-        the model invented that happens to type-check).
+        Used before splitting THEOREM.lean on `sorry` and matching
+        fragments in the submitted proof — this way formatting
+        differences (indentation, line wrapping, extra blank lines)
+        don't produce false rejections.
         """
-        stripped = Prover._strip_lean_comments(theorem_text)
-        return re.findall(
-            rf"^\s*(?:theorem|lemma|def)\s+({Prover._LEAN_IDENT})",
-            stripped,
-            re.MULTILINE,
-        )
+        return " ".join(Prover._strip_lean_comments(text).split())
 
     @staticmethod
-    def _extract_theorem_signature(text: str, name: str) -> str | None:
-        """Return the normalized signature of `theorem <name>` (binders +
-        conclusion type), or None if the declaration isn't found.
+    def _check_proof_preserves_theorem(theorem_text: str,
+                                       proof_text: str) -> str | None:
+        """Verify the submitted proof preserves everything from THEOREM.lean
+        except for `sorry` replacements.
 
-        The signature is everything between `theorem <name>` and the `:=`
-        that starts the proof body, with whitespace (including newlines
-        and multiple spaces) collapsed to single spaces. Comments are
-        stripped before extraction so commented-out tokens don't pollute
-        the signature.
+        We split THEOREM.lean (from its first theorem/lemma/def onward)
+        at each `sorry` keyword, producing a list of fragments. The
+        submitted proof is valid iff these fragments appear in order
+        inside it, with no `sorry` remaining in between. This catches:
+          - renamed theorem (name is in the first fragment)
+          - changed signature (signature is in the first fragment)
+          - added / removed binders or hypotheses
+          - anonymous `example` instead of named theorem
+          - leftover `sorry` in the proof body
 
-        Used to detect models that keep the original theorem name but
-        change its type (e.g. `theorem exercise_3_9 : True := trivial`).
+        Returns None on success, or a human-readable reason string on
+        failure (which is fed back to the model).
         """
-        stripped = Prover._strip_lean_comments(text)
-        name_re = re.escape(name)
-        # Use an explicit "not followed by an identifier char" lookahead
-        # instead of \b — \b doesn't work correctly when the name ends
-        # in an apostrophe (e.g. `exercise_3_22'`), because \b requires
-        # a word char transition and apostrophe is non-word.
-        match = re.search(
-            rf"^\s*(?:theorem|lemma|def)\s+{name_re}(?![a-zA-Z0-9_'])(.*?):=",
-            stripped,
-            re.MULTILINE | re.DOTALL,
+        thm = Prover._strip_lean_comments(theorem_text)
+        # Only require matching from the first declaration onward — the
+        # preamble (imports/opens) may legitimately differ between the
+        # harness-provided file and the model's submission.
+        thm_start = re.search(
+            r"^\s*(?:theorem|lemma|def)\s",
+            thm,
+            re.MULTILINE,
         )
-        if not match:
+        if not thm_start:
+            return None  # THEOREM.lean has no declaration; nothing to check
+        thm = thm[thm_start.start():]
+
+        # Split on `sorry` (word boundary). If there's no sorry, the
+        # theorem has no hole — nothing to do.
+        fragments = re.split(r"\bsorry\b", thm)
+        if len(fragments) == 1:
             return None
-        return " ".join(match.group(1).split())
+
+        # Normalize whitespace for both the fragments and the submitted
+        # proof so indentation / line-wrapping / blank-line differences
+        # don't count.
+        fragments = [" ".join(f.split()) for f in fragments]
+        prf = " ".join(Prover._strip_lean_comments(proof_text).split())
+
+        pos = 0
+        last_frag_idx = len(fragments) - 1
+        for i, frag in enumerate(fragments):
+            if not frag:
+                # Empty fragment. Two common cases:
+                #   - Last fragment is empty: the theorem ends with
+                #     `sorry`, so the "hole" is everything after the
+                #     previous fragment. We must verify no sorry
+                #     remains there.
+                #   - Intermediate empty fragment: two sorries were
+                #     adjacent in THEOREM.lean (very rare). We can't
+                #     easily split one from the other, so we fall back
+                #     to "no sorry anywhere after pos".
+                if re.search(r"\bsorry\b", prf[pos:]):
+                    return (
+                        f"Your submitted proof still contains `sorry` "
+                        f"where proof {i} should be. You must replace "
+                        f"each `sorry` with an actual proof."
+                    )
+                continue
+            idx = prf.find(frag, pos)
+            if idx < 0:
+                label = (
+                    "the theorem header (everything up to the first `sorry`)"
+                    if i == 0 else
+                    f"the text that should appear after sorry #{i}"
+                )
+                return (
+                    f"{label} from THEOREM.lean was not found in your "
+                    f"submitted proof. Copy the theorem statement "
+                    f"verbatim from THEOREM.lean — you may only change "
+                    f"what replaces each `sorry`.\n\n"
+                    f"Missing fragment (first 200 chars):\n  `{frag[:200]}`"
+                )
+            # Check that no `sorry` remains between fragments (i.e. in
+            # the hole that should have been filled with a real proof).
+            if i > 0:
+                between = prf[pos:idx]
+                if re.search(r"\bsorry\b", between):
+                    return (
+                        f"Your submitted proof still contains `sorry` "
+                        f"where proof {i} should be. You must replace "
+                        f"each `sorry` with an actual proof."
+                    )
+            pos = idx + len(frag)
+
+        return None
 
     def _handle_submit_lean_proof(self, plan: dict, step_dir: Path) -> str:
         """Handle submit_lean_proof - submit a lean repo item as the formal proof."""
@@ -1125,78 +1182,29 @@ class Prover:
         proof_text = content
         logger.info("Lean proof from [[%s]]: %d chars", lean_proof_slug, len(proof_text))
 
-        # Integrity check: the submitted file MUST declare every
-        # theorem/lemma/def that THEOREM.lean declares, AND each
-        # declaration's signature (binders + conclusion type) must
-        # match the original. Otherwise the model "proved" something
-        # different — renamed theorem, anonymous `example`, or kept
-        # the name but changed the type (e.g. `theorem exercise_3_9 :
-        # True := trivial`). Lean will happily compile any of these;
-        # only this structural check catches the mismatch.
+        # Integrity check: the submitted file must preserve THEOREM.lean
+        # verbatim from the first `theorem/lemma/def` onward, with only
+        # the `sorry` holes replaced by actual proof bodies. This single
+        # check catches renamed theorems, anonymous `example`, changed
+        # signatures, added/removed hypotheses, and leftover `sorry` —
+        # all of which Lean would compile but none of which actually
+        # prove the benchmark task.
         if self.lean_theorem_text:
-            expected = self._extract_expected_theorem_names(self.lean_theorem_text)
-            declared = self._extract_expected_theorem_names(proof_text)
-            missing = [n for n in expected if n not in declared]
-            if expected and missing:
+            reason = self._check_proof_preserves_theorem(
+                self.lean_theorem_text, proof_text,
+            )
+            if reason is not None:
                 self.tui.log(
-                    f"submit_lean_proof: missing expected theorem(s): "
-                    f"{', '.join(missing)}",
+                    f"submit_lean_proof: proof does not match THEOREM.lean",
                     color="red",
                 )
                 logger.info(
-                    "submit_lean_proof rejected [[%s]]: proof declares %s, "
-                    "expected %s (missing: %s)",
-                    lean_proof_slug, declared, expected, missing,
+                    "submit_lean_proof rejected [[%s]]: %s",
+                    lean_proof_slug, reason.splitlines()[0],
                 )
                 self._push_output(
                     f"submit_lean_proof REJECTED for [[{lean_proof_slug}]]: "
-                    f"the submitted file must declare the original "
-                    f"theorem name(s) from THEOREM.lean. Missing: "
-                    f"{', '.join(missing)}. The file declares: "
-                    f"{', '.join(declared) or '(nothing named)'}.\n\n"
-                    f"You must prove the theorem with its ORIGINAL name — "
-                    f"do not rename it, do not use anonymous `example`, and "
-                    f"do not prove a different but related statement."
-                )
-                return "continue"
-
-            # All expected names are present — check signatures match.
-            sig_mismatches = []
-            for name in expected:
-                orig = self._extract_theorem_signature(self.lean_theorem_text, name)
-                submitted = self._extract_theorem_signature(proof_text, name)
-                if orig is not None and orig != submitted:
-                    sig_mismatches.append((name, orig, submitted))
-
-            if sig_mismatches:
-                summary = "; ".join(
-                    f"'{n}'" for n, _, _ in sig_mismatches
-                )
-                self.tui.log(
-                    f"submit_lean_proof: signature mismatch for: {summary}",
-                    color="red",
-                )
-                logger.info(
-                    "submit_lean_proof rejected [[%s]]: signature mismatch "
-                    "on %s", lean_proof_slug, summary,
-                )
-                details = "\n\n".join(
-                    f"### {n}\n"
-                    f"Expected signature (from THEOREM.lean):\n"
-                    f"  `{orig}`\n"
-                    f"Your submitted signature:\n"
-                    f"  `{sub}`"
-                    for n, orig, sub in sig_mismatches
-                )
-                self._push_output(
-                    f"submit_lean_proof REJECTED for [[{lean_proof_slug}]]: "
-                    f"one or more theorems are declared with a DIFFERENT "
-                    f"signature than the original THEOREM.lean. You cannot "
-                    f"prove a different (even related) statement under the "
-                    f"same name — the benchmark task requires the EXACT "
-                    f"original statement.\n\n{details}\n\n"
-                    f"Copy the theorem signature verbatim from THEOREM.lean "
-                    f"and only change the proof body after `:=`."
+                    f"{reason}"
                 )
                 return "continue"
 
