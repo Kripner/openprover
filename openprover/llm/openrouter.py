@@ -279,11 +279,33 @@ class OpenRouterClient:
             # OpenRouter emits `: OPENROUTER PROCESSING` SSE-style keep-alive
             # comment lines during long non-streaming waits (providers like
             # SambaNova can take tens of minutes). Strip comment lines and
-            # retry; if a real JSON object is embedded, we'll find it.
+            # blank/whitespace-only lines; if a real JSON object is embedded,
+            # we'll find it. If nothing is left, the upstream never sent a
+            # body — treat as a request timeout so retry logic kicks in.
             text = body_bytes.decode(errors="replace")
             cleaned = "\n".join(
-                ln for ln in text.splitlines() if not ln.lstrip().startswith(":")
+                ln for ln in text.splitlines()
+                if ln.strip() and not ln.lstrip().startswith(":")
             ).strip()
+            if not cleaned:
+                elapsed_ms = int((time.time() - start) * 1000)
+                if archive_path is not None:
+                    try:
+                        archive_path.parent.mkdir(parents=True, exist_ok=True)
+                        archive_path.with_suffix(".raw.body").write_bytes(body_bytes)
+                    except Exception:
+                        pass
+                self._archive(
+                    call_num, label, prompt, system_prompt, json_schema,
+                    None,
+                    (f"empty response (only keep-alives) after "
+                     f"{elapsed_ms/1000:.0f}s; body[:500]={text[:500]!r}"),
+                    elapsed_ms, archive_path,
+                )
+                raise RuntimeError(
+                    f"OpenRouter request timed out after {elapsed_ms/1000:.0f}s "
+                    f"(server sent {len(body_bytes)} bytes of keep-alive only)"
+                )
             try:
                 raw = json.loads(cleaned)
             except json.JSONDecodeError as e:
