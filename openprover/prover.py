@@ -1049,6 +1049,15 @@ class Prover:
 
         return self._check_completion(feedback)
 
+    _LEAN_IDENT = r"[a-zA-Z_][a-zA-Z0-9_']*"
+
+    @staticmethod
+    def _strip_lean_comments(text: str) -> str:
+        """Strip Lean line comments (`-- …`) and block comments (`/- … -/`)."""
+        text = re.sub(r"/-.*?-/", "", text, flags=re.DOTALL)
+        text = re.sub(r"--[^\n]*", "", text)
+        return text
+
     @staticmethod
     def _extract_expected_theorem_names(theorem_text: str) -> list[str]:
         """Return the names of theorems/lemmas/defs declared in THEOREM.lean.
@@ -1057,15 +1066,41 @@ class Prover:
         it actually proves the benchmark task (and not some other theorem
         the model invented that happens to type-check).
         """
-        # Strip comments so we don't match names inside commented-out code
-        stripped = re.sub(r"/-.*?-/", "", theorem_text, flags=re.DOTALL)
-        stripped = re.sub(r"--[^\n]*", "", stripped)
-        ident = r"[a-zA-Z_][a-zA-Z0-9_']*"
+        stripped = Prover._strip_lean_comments(theorem_text)
         return re.findall(
-            rf"^\s*(?:theorem|lemma|def)\s+({ident})",
+            rf"^\s*(?:theorem|lemma|def)\s+({Prover._LEAN_IDENT})",
             stripped,
             re.MULTILINE,
         )
+
+    @staticmethod
+    def _extract_theorem_signature(text: str, name: str) -> str | None:
+        """Return the normalized signature of `theorem <name>` (binders +
+        conclusion type), or None if the declaration isn't found.
+
+        The signature is everything between `theorem <name>` and the `:=`
+        that starts the proof body, with whitespace (including newlines
+        and multiple spaces) collapsed to single spaces. Comments are
+        stripped before extraction so commented-out tokens don't pollute
+        the signature.
+
+        Used to detect models that keep the original theorem name but
+        change its type (e.g. `theorem exercise_3_9 : True := trivial`).
+        """
+        stripped = Prover._strip_lean_comments(text)
+        name_re = re.escape(name)
+        # Use an explicit "not followed by an identifier char" lookahead
+        # instead of \b — \b doesn't work correctly when the name ends
+        # in an apostrophe (e.g. `exercise_3_22'`), because \b requires
+        # a word char transition and apostrophe is non-word.
+        match = re.search(
+            rf"^\s*(?:theorem|lemma|def)\s+{name_re}(?![a-zA-Z0-9_'])(.*?):=",
+            stripped,
+            re.MULTILINE | re.DOTALL,
+        )
+        if not match:
+            return None
+        return " ".join(match.group(1).split())
 
     def _handle_submit_lean_proof(self, plan: dict, step_dir: Path) -> str:
         """Handle submit_lean_proof - submit a lean repo item as the formal proof."""
@@ -1090,10 +1125,14 @@ class Prover:
         proof_text = content
         logger.info("Lean proof from [[%s]]: %d chars", lean_proof_slug, len(proof_text))
 
-        # Name check: the submitted file MUST declare every theorem/lemma/def
-        # that THEOREM.lean declares. Otherwise the model "proved" something
-        # different (renamed theorem, anonymous `example`, etc.) and the
-        # benchmark task wasn't actually done even though Lean compiles.
+        # Integrity check: the submitted file MUST declare every
+        # theorem/lemma/def that THEOREM.lean declares, AND each
+        # declaration's signature (binders + conclusion type) must
+        # match the original. Otherwise the model "proved" something
+        # different — renamed theorem, anonymous `example`, or kept
+        # the name but changed the type (e.g. `theorem exercise_3_9 :
+        # True := trivial`). Lean will happily compile any of these;
+        # only this structural check catches the mismatch.
         if self.lean_theorem_text:
             expected = self._extract_expected_theorem_names(self.lean_theorem_text)
             declared = self._extract_expected_theorem_names(proof_text)
@@ -1118,6 +1157,46 @@ class Prover:
                     f"You must prove the theorem with its ORIGINAL name — "
                     f"do not rename it, do not use anonymous `example`, and "
                     f"do not prove a different but related statement."
+                )
+                return "continue"
+
+            # All expected names are present — check signatures match.
+            sig_mismatches = []
+            for name in expected:
+                orig = self._extract_theorem_signature(self.lean_theorem_text, name)
+                submitted = self._extract_theorem_signature(proof_text, name)
+                if orig is not None and orig != submitted:
+                    sig_mismatches.append((name, orig, submitted))
+
+            if sig_mismatches:
+                summary = "; ".join(
+                    f"'{n}'" for n, _, _ in sig_mismatches
+                )
+                self.tui.log(
+                    f"submit_lean_proof: signature mismatch for: {summary}",
+                    color="red",
+                )
+                logger.info(
+                    "submit_lean_proof rejected [[%s]]: signature mismatch "
+                    "on %s", lean_proof_slug, summary,
+                )
+                details = "\n\n".join(
+                    f"### {n}\n"
+                    f"Expected signature (from THEOREM.lean):\n"
+                    f"  `{orig}`\n"
+                    f"Your submitted signature:\n"
+                    f"  `{sub}`"
+                    for n, orig, sub in sig_mismatches
+                )
+                self._push_output(
+                    f"submit_lean_proof REJECTED for [[{lean_proof_slug}]]: "
+                    f"one or more theorems are declared with a DIFFERENT "
+                    f"signature than the original THEOREM.lean. You cannot "
+                    f"prove a different (even related) statement under the "
+                    f"same name — the benchmark task requires the EXACT "
+                    f"original statement.\n\n{details}\n\n"
+                    f"Copy the theorem signature verbatim from THEOREM.lean "
+                    f"and only change the proof body after `:=`."
                 )
                 return "continue"
 
