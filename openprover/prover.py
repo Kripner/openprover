@@ -1049,6 +1049,24 @@ class Prover:
 
         return self._check_completion(feedback)
 
+    @staticmethod
+    def _extract_expected_theorem_names(theorem_text: str) -> list[str]:
+        """Return the names of theorems/lemmas/defs declared in THEOREM.lean.
+
+        These are the names the submitted proof MUST re-declare so that
+        it actually proves the benchmark task (and not some other theorem
+        the model invented that happens to type-check).
+        """
+        # Strip comments so we don't match names inside commented-out code
+        stripped = re.sub(r"/-.*?-/", "", theorem_text, flags=re.DOTALL)
+        stripped = re.sub(r"--[^\n]*", "", stripped)
+        ident = r"[a-zA-Z_][a-zA-Z0-9_']*"
+        return re.findall(
+            rf"^\s*(?:theorem|lemma|def)\s+({ident})",
+            stripped,
+            re.MULTILINE,
+        )
+
     def _handle_submit_lean_proof(self, plan: dict, step_dir: Path) -> str:
         """Handle submit_lean_proof - submit a lean repo item as the formal proof."""
         lean_proof_slug = plan.get("lean_proof_slug", "")
@@ -1071,6 +1089,37 @@ class Prover:
 
         proof_text = content
         logger.info("Lean proof from [[%s]]: %d chars", lean_proof_slug, len(proof_text))
+
+        # Name check: the submitted file MUST declare every theorem/lemma/def
+        # that THEOREM.lean declares. Otherwise the model "proved" something
+        # different (renamed theorem, anonymous `example`, etc.) and the
+        # benchmark task wasn't actually done even though Lean compiles.
+        if self.lean_theorem_text:
+            expected = self._extract_expected_theorem_names(self.lean_theorem_text)
+            declared = self._extract_expected_theorem_names(proof_text)
+            missing = [n for n in expected if n not in declared]
+            if expected and missing:
+                self.tui.log(
+                    f"submit_lean_proof: missing expected theorem(s): "
+                    f"{', '.join(missing)}",
+                    color="red",
+                )
+                logger.info(
+                    "submit_lean_proof rejected [[%s]]: proof declares %s, "
+                    "expected %s (missing: %s)",
+                    lean_proof_slug, declared, expected, missing,
+                )
+                self._push_output(
+                    f"submit_lean_proof REJECTED for [[{lean_proof_slug}]]: "
+                    f"the submitted file must declare the original "
+                    f"theorem name(s) from THEOREM.lean. Missing: "
+                    f"{', '.join(missing)}. The file declares: "
+                    f"{', '.join(declared) or '(nothing named)'}.\n\n"
+                    f"You must prove the theorem with its ORIGINAL name — "
+                    f"do not rename it, do not use anonymous `example`, and "
+                    f"do not prove a different but related statement."
+                )
+                return "continue"
 
         # Write and verify
         proof_path = self.lean_work_dir.make_file("proof-attempt", proof_text)
