@@ -16,6 +16,9 @@ class InputMixin:
         _last_budget_refresh = 0.0
         while not self._bg_stop:
             try:
+                if self._resize_pending:
+                    self._apply_resize()
+
                 self._advance_tab_spinners()
                 tab = self._active_tab
                 if tab.spinner_label and tab.streaming:
