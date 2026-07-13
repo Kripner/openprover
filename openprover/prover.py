@@ -1,5 +1,6 @@
 """Core proving loop for OpenProver - planner/worker architecture."""
 
+import errno
 import json
 import logging
 import re
@@ -211,6 +212,8 @@ class Prover:
         self._rate_limit_backoff = 4  # separate backoff for --on-rate-limited
         self._transient_backoff = 4  # backoff for transient errors (timeouts, 5xx)
         self._consecutive_errors = 0  # consecutive error counter
+        self._llm_error_exit = False  # set when giving up on MAX_CONSECUTIVE_ERRORS
+        self._last_error_msg = ""  # most recent error, for reporting on llm_error_exit
         self.budget = budget
         self.autonomous = autonomous
         self.verbose = verbose
@@ -415,6 +418,7 @@ class Prover:
                         f"{MAX_CONSECUTIVE_ERRORS} consecutive errors - giving up.",
                         color="red",
                     )
+                    self._llm_error_exit = True
                     break
             self._save_step_history()
             if result == "stop":
@@ -675,6 +679,7 @@ class Prover:
                     self.tui.stream_end(tab="planner")
                     logger.error("Planner error: %s", e)
                     self.tui.log(f"Error: {e}", color="red")
+                    self._last_error_msg = str(e)
                     action = self._check_error_policy(e)
                     if action == "retry":
                         continue
@@ -1044,6 +1049,116 @@ class Prover:
 
         return self._check_completion(feedback)
 
+    @staticmethod
+    def _strip_lean_comments(text: str) -> str:
+        """Strip Lean line comments (`-- …`) and block comments (`/- … -/`)."""
+        text = re.sub(r"/-.*?-/", "", text, flags=re.DOTALL)
+        text = re.sub(r"--[^\n]*", "", text)
+        return text
+
+    @staticmethod
+    def _normalize_lean(text: str) -> str:
+        """Strip comments and collapse whitespace runs to single spaces.
+
+        Used before splitting THEOREM.lean on `sorry` and matching
+        fragments in the submitted proof — this way formatting
+        differences (indentation, line wrapping, extra blank lines)
+        don't produce false rejections.
+        """
+        return " ".join(Prover._strip_lean_comments(text).split())
+
+    @staticmethod
+    def _check_proof_preserves_theorem(theorem_text: str,
+                                       proof_text: str) -> str | None:
+        """Verify the submitted proof preserves everything from THEOREM.lean
+        except for `sorry` replacements.
+
+        We split THEOREM.lean (from its first theorem/lemma/def onward)
+        at each `sorry` keyword, producing a list of fragments. The
+        submitted proof is valid iff these fragments appear in order
+        inside it, with no `sorry` remaining in between. This catches:
+          - renamed theorem (name is in the first fragment)
+          - changed signature (signature is in the first fragment)
+          - added / removed binders or hypotheses
+          - anonymous `example` instead of named theorem
+          - leftover `sorry` in the proof body
+
+        Returns None on success, or a human-readable reason string on
+        failure (which is fed back to the model).
+        """
+        thm = Prover._strip_lean_comments(theorem_text)
+        # Only require matching from the first declaration onward — the
+        # preamble (imports/opens) may legitimately differ between the
+        # harness-provided file and the model's submission.
+        thm_start = re.search(
+            r"^\s*(?:theorem|lemma|def)\s",
+            thm,
+            re.MULTILINE,
+        )
+        if not thm_start:
+            return None  # THEOREM.lean has no declaration; nothing to check
+        thm = thm[thm_start.start():]
+
+        # Split on `sorry` (word boundary). If there's no sorry, the
+        # theorem has no hole — nothing to do.
+        fragments = re.split(r"\bsorry\b", thm)
+        if len(fragments) == 1:
+            return None
+
+        # Normalize whitespace for both the fragments and the submitted
+        # proof so indentation / line-wrapping / blank-line differences
+        # don't count.
+        fragments = [" ".join(f.split()) for f in fragments]
+        prf = " ".join(Prover._strip_lean_comments(proof_text).split())
+
+        pos = 0
+        last_frag_idx = len(fragments) - 1
+        for i, frag in enumerate(fragments):
+            if not frag:
+                # Empty fragment. Two common cases:
+                #   - Last fragment is empty: the theorem ends with
+                #     `sorry`, so the "hole" is everything after the
+                #     previous fragment. We must verify no sorry
+                #     remains there.
+                #   - Intermediate empty fragment: two sorries were
+                #     adjacent in THEOREM.lean (very rare). We can't
+                #     easily split one from the other, so we fall back
+                #     to "no sorry anywhere after pos".
+                if re.search(r"\bsorry\b", prf[pos:]):
+                    return (
+                        f"Your submitted proof still contains `sorry` "
+                        f"where proof {i} should be. You must replace "
+                        f"each `sorry` with an actual proof."
+                    )
+                continue
+            idx = prf.find(frag, pos)
+            if idx < 0:
+                label = (
+                    "the theorem header (everything up to the first `sorry`)"
+                    if i == 0 else
+                    f"the text that should appear after sorry #{i}"
+                )
+                return (
+                    f"{label} from THEOREM.lean was not found in your "
+                    f"submitted proof. Copy the theorem statement "
+                    f"verbatim from THEOREM.lean — you may only change "
+                    f"what replaces each `sorry`.\n\n"
+                    f"Missing fragment (first 200 chars):\n  `{frag[:200]}`"
+                )
+            # Check that no `sorry` remains between fragments (i.e. in
+            # the hole that should have been filled with a real proof).
+            if i > 0:
+                between = prf[pos:idx]
+                if re.search(r"\bsorry\b", between):
+                    return (
+                        f"Your submitted proof still contains `sorry` "
+                        f"where proof {i} should be. You must replace "
+                        f"each `sorry` with an actual proof."
+                    )
+            pos = idx + len(frag)
+
+        return None
+
     def _handle_submit_lean_proof(self, plan: dict, step_dir: Path) -> str:
         """Handle submit_lean_proof - submit a lean repo item as the formal proof."""
         lean_proof_slug = plan.get("lean_proof_slug", "")
@@ -1066,6 +1181,32 @@ class Prover:
 
         proof_text = content
         logger.info("Lean proof from [[%s]]: %d chars", lean_proof_slug, len(proof_text))
+
+        # Integrity check: the submitted file must preserve THEOREM.lean
+        # verbatim from the first `theorem/lemma/def` onward, with only
+        # the `sorry` holes replaced by actual proof bodies. This single
+        # check catches renamed theorems, anonymous `example`, changed
+        # signatures, added/removed hypotheses, and leftover `sorry` —
+        # all of which Lean would compile but none of which actually
+        # prove the benchmark task.
+        if self.lean_theorem_text:
+            reason = self._check_proof_preserves_theorem(
+                self.lean_theorem_text, proof_text,
+            )
+            if reason is not None:
+                self.tui.log(
+                    f"submit_lean_proof: proof does not match THEOREM.lean",
+                    color="red",
+                )
+                logger.info(
+                    "submit_lean_proof rejected [[%s]]: %s",
+                    lean_proof_slug, reason.splitlines()[0],
+                )
+                self._push_output(
+                    f"submit_lean_proof REJECTED for [[{lean_proof_slug}]]: "
+                    f"{reason}"
+                )
+                return "continue"
 
         # Write and verify
         proof_path = self.lean_work_dir.make_file("proof-attempt", proof_text)
@@ -1133,6 +1274,22 @@ class Prover:
         self._push_output(self.repo.read_items(slugs))
         self.tui.log(f"Read {len(slugs)} item(s): {', '.join(slugs)}", dim=True)
 
+    _SLUG_MAX_LEN = 100
+
+    @staticmethod
+    def _validate_slug(slug: str) -> str | None:
+        """Return None if valid, else a human-readable rejection reason."""
+        if len(slug) > Prover._SLUG_MAX_LEN:
+            return (f"slug too long ({len(slug)} chars, max "
+                    f"{Prover._SLUG_MAX_LEN}); use a short identifier, "
+                    f"not the item's content")
+        if any(c in slug for c in "\n\r\t\x00"):
+            return "slug contains newline/tab/null characters"
+        parts = slug.split("/")
+        if any(p in ("", ".", "..") for p in parts):
+            return "slug contains empty, '.' or '..' path components"
+        return None
+
     def _handle_write_items(self, plan: dict, step_dir: Path):
         items = plan.get("items", [])
         if not items:
@@ -1145,6 +1302,18 @@ class Prover:
             slug = item.get("slug", "")
             if not slug:
                 continue
+            # Validate slug: must be a short, well-formed identifier
+            reason = self._validate_slug(slug)
+            if reason:
+                preview = slug[:60].replace("\n", "\\n")
+                self.tui.log(f"Rejecting slug '{preview}...': {reason}", color="red")
+                logger.info("Rejected write_item slug: %s", reason)
+                lean_feedback.append(
+                    f"[[{preview}...]]: Rejected - {reason}. "
+                    f"Slugs must be short identifiers (e.g. 'helpers/compact-trick'), "
+                    f"not the item's content."
+                )
+                continue
             content = item.get("content")
             fmt = item.get("format", "markdown")
 
@@ -1156,61 +1325,93 @@ class Prover:
                 )
                 continue
 
-            if fmt == "lean" and content and self.lean_work_dir:
-                path = self.lean_work_dir.make_file(slug, content)
-                self.tui.log(f"Verifying [[{slug}]]...", dim=True)
-                success, feedback, cmd_info = run_lean_check(path, self.lean_project_dir)
-
-                lean_dir = step_dir / "lean"
-                lean_dir.mkdir(exist_ok=True)
-                flat_slug = slug.replace("/", "_")
-                (lean_dir / f"item_{lean_idx}_{flat_slug}.lean").write_text(content)
-                (lean_dir / f"result_{lean_idx}_{flat_slug}.txt").write_text(
-                    "OK" if success else feedback)
-                (lean_dir / f"cmd_{lean_idx}_{flat_slug}.txt").write_text(cmd_info)
-                lean_idx += 1
-
-                # Distinguish real errors from warnings-only
-                if not success and feedback:
-                    if not lean_has_errors(feedback) and "sorry" not in feedback.lower():
-                        # Warnings only, no errors - treat as success
-                        success = True
-
-                if success:
-                    self.repo.write_item(slug, content, fmt="lean")
-                    if feedback:
-                        self.tui.log(f"Wrote [[{slug}]] (lean, warnings only)",
-                                     color="green")
-                        logger.info("Lean item [[%s]] verified with warnings", slug)
-                        lean_feedback.append(
-                            f"[[{slug}]]: Lean verification PASSED (with warnings)"
-                            f"\n```\n{feedback}\n```"
-                        )
-                    else:
-                        self.tui.log(f"Wrote [[{slug}]] (lean, verified OK)",
-                                     color="green")
-                        logger.info("Lean item [[%s]] verified OK", slug)
-                        lean_feedback.append(f"[[{slug}]]: Lean verification PASSED")
-                else:
-                    self.tui.log(f"[[{slug}]] lean verification failed - not saved",
-                                 color="yellow")
-                    logger.info("Lean item [[%s]] failed verification - not saved", slug)
-                    lean_feedback.append(
-                        f"[[{slug}]]: Lean verification FAILED - item was NOT saved "
-                        f"to the repo.\n```\n{feedback}\n```"
-                    )
-            elif not content:
-                self.repo.write_item(slug, content)
-                self.tui.log(f"Deleted [[{slug}]]", color="yellow")
-            else:
-                self.repo.write_item(slug, content)
-                first_line = content.split("\n", 1)[0]
-                self.tui.log(f"Wrote [[{slug}]]: {first_line}", color="green")
+            try:
+                self._handle_write_item(slug, content, fmt, step_dir,
+                                        lean_idx, lean_feedback)
+                if fmt == "lean" and content and self.lean_work_dir:
+                    lean_idx += 1
+            except OSError as e:
+                # Only swallow errors caused by malformed slug input; let
+                # system-level failures (disk full, quota, I/O, permissions,
+                # read-only FS) propagate — those are not the model's fault
+                # and should fail loudly.
+                if e.errno not in (errno.ENAMETOOLONG, errno.EINVAL):
+                    raise
+                self.tui.log(f"[[{slug}]]: error writing item: {e}", color="red")
+                logger.info("Rejected write_item: %s: %s", type(e).__name__, e)
+                lean_feedback.append(
+                    f"[[{slug}]]: Rejected - {type(e).__name__}: {e}. "
+                    f"The item was NOT saved."
+                )
+            except ValueError as e:
+                # pathlib/os raise ValueError for things like embedded null
+                # bytes — unambiguously bad slug input, safe to surface to
+                # the model as feedback.
+                self.tui.log(f"[[{slug}]]: error writing item: {e}", color="red")
+                logger.info("Rejected write_item: %s: %s", type(e).__name__, e)
+                lean_feedback.append(
+                    f"[[{slug}]]: Rejected - {type(e).__name__}: {e}. "
+                    f"The item was NOT saved."
+                )
 
         if lean_feedback:
             self._push_output(
                 "## Lean Verification Results\n\n" + "\n\n".join(lean_feedback)
             )
+
+    def _handle_write_item(self, slug: str, content,
+                           fmt: str, step_dir: Path,
+                           lean_idx: int, lean_feedback: list):
+        """Process a single write_items entry. Appends to lean_feedback."""
+        if fmt == "lean" and content and self.lean_work_dir:
+            path = self.lean_work_dir.make_file(slug, content)
+            self.tui.log(f"Verifying [[{slug}]]...", dim=True)
+            success, feedback, cmd_info = run_lean_check(path, self.lean_project_dir)
+
+            lean_dir = step_dir / "lean"
+            lean_dir.mkdir(exist_ok=True)
+            flat_slug = slug.replace("/", "_")
+            (lean_dir / f"item_{lean_idx}_{flat_slug}.lean").write_text(content)
+            (lean_dir / f"result_{lean_idx}_{flat_slug}.txt").write_text(
+                "OK" if success else feedback)
+            (lean_dir / f"cmd_{lean_idx}_{flat_slug}.txt").write_text(cmd_info)
+
+            # Distinguish real errors from warnings-only
+            if not success and feedback:
+                if not lean_has_errors(feedback) and "sorry" not in feedback.lower():
+                    # Warnings only, no errors - treat as success
+                    success = True
+
+            if success:
+                self.repo.write_item(slug, content, fmt="lean")
+                if feedback:
+                    self.tui.log(f"Wrote [[{slug}]] (lean, warnings only)",
+                                 color="green")
+                    logger.info("Lean item [[%s]] verified with warnings", slug)
+                    lean_feedback.append(
+                        f"[[{slug}]]: Lean verification PASSED (with warnings)"
+                        f"\n```\n{feedback}\n```"
+                    )
+                else:
+                    self.tui.log(f"Wrote [[{slug}]] (lean, verified OK)",
+                                 color="green")
+                    logger.info("Lean item [[%s]] verified OK", slug)
+                    lean_feedback.append(f"[[{slug}]]: Lean verification PASSED")
+            else:
+                self.tui.log(f"[[{slug}]] lean verification failed - not saved",
+                             color="yellow")
+                logger.info("Lean item [[%s]] failed verification - not saved", slug)
+                lean_feedback.append(
+                    f"[[{slug}]]: Lean verification FAILED - item was NOT saved "
+                    f"to the repo.\n```\n{feedback}\n```"
+                )
+        elif not content:
+            self.repo.write_item(slug, content)
+            self.tui.log(f"Deleted [[{slug}]]", color="yellow")
+        else:
+            self.repo.write_item(slug, content)
+            first_line = content.split("\n", 1)[0]
+            self.tui.log(f"Wrote [[{slug}]]: {first_line}", color="green")
 
     def _handle_read_theorem(self):
         parts = [f"## THEOREM.md\n\n{self.theorem_text}"]

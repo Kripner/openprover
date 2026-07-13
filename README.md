@@ -151,7 +151,7 @@ When confirming a step: Tab switches between accept/feedback, Enter confirms or 
 
 To use formal verification (`--lean-project`), you need [elan](https://github.com/leanprover/elan) (Lean version manager) installed. elan automatically fetches the right Lean toolchain.
 
-Benchmarks like MiniF2F and PutnamBench ship their own Lean projects with Mathlib dependencies. Build them once before running:
+Benchmarks like MiniF2F, PutnamBench, and ProofNet ship their own Lean projects with Mathlib dependencies. Build them once before running:
 
 ```bash
 # MiniF2F
@@ -163,6 +163,12 @@ lake build           # compile MiniF2F itself
 # PutnamBench
 git clone https://github.com/trishullab/PutnamBench.git
 cd PutnamBench/lean4
+lake exe cache get
+lake build
+
+# ProofNet (Lean 4.27.0 / Mathlib v4.27.0)
+git clone https://github.com/kripner/proofnet.git
+cd proofnet/ProofNet
 lake exe cache get
 lake build
 ```
@@ -184,6 +190,10 @@ python scripts/run_minif2f.py test  --model leanstral --repo-path ./miniF2F --ma
 
 # PutnamBench
 python scripts/run_putnam.py --repo-path ./PutnamBench --model opus --max-time 2h --problem-parallelism 4
+
+# ProofNet (loads problems from data/proofnet.jsonl, verifies against ProofNet/ lake project)
+python scripts/run_proofnet.py valid --model leanstral --repo-path ./proofnet --max-time 10m --parallelism 10
+python scripts/run_proofnet.py test  --model leanstral --repo-path ./proofnet --max-time 10m
 
 # ProofBench
 python scripts/run_proofbench.py --model leanstral --repo-path ./miniF2F --max-time 10m
@@ -262,14 +272,14 @@ The `examples/` directory has theorem statements at various difficulty levels:
 
 # Cite
 
-If you find OpenProver helpful in your research cite simply as:
+If you find OpenProver helpful in your research cite as:
 
 ```
-@misc{openprover,
-  author = {Matěj Kripner},
-  title = {OpenProver},
-  year = {2025},
-  publisher = {GitHub},
-  url = {https://github.com/kripner/openprover}
+@inproceedings{openprover,
+  title     = {{OpenProver}: Agentic and Interactive Theorem Proving with {Lean 4}},
+  author    = {Matěj Kripner and Milan Straka},
+  booktitle = {19th Conference on Intelligent Computer Mathematics (CICM 2026)},
+  year      = {2026},
+  url       = {https://arxiv.org/abs/2607.09217}
 }
 ```

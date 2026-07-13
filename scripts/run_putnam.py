@@ -70,6 +70,10 @@ def _run_problem(problem_name: str, statement: str, lean_dir: Path,
             return (problem_name, "error", elapsed, "\n".join(lines))
         if "[result] proved" in result.stdout:
             return (problem_name, "proved", elapsed, "")
+        for line in result.stdout.splitlines():
+            if line.startswith("[result] error"):
+                err = line[len("[result] error"):].lstrip(": ").strip() or "openprover exited with LLM errors"
+                return (problem_name, "error", elapsed, err)
         return (problem_name, "not_proved", elapsed, "")
     except Exception as e:
         return (problem_name, "error", time.monotonic() - start, str(e))

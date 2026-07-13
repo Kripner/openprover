@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark openprover (or baseline) against MiniF2F problems."""
+"""Benchmark openprover (or baseline) against ProofNet problems."""
 
 import argparse
 import json
@@ -9,27 +9,12 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-VALID_URL = "https://raw.githubusercontent.com/google-deepmind/miniF2F/refs/heads/main/MiniF2F/Valid.lean"
-TEST_URL = "https://raw.githubusercontent.com/google-deepmind/miniF2F/refs/heads/main/MiniF2F/Test.lean"
-
 CLAUDE_MODELS = {"sonnet", "opus"}
 RATE_LIMIT_WAIT = 600  # seconds to wait before retrying after rate limit
-
-# Preamble that every extracted theorem file needs.
-LEAN_PREAMBLE = """\
-import MiniF2F.ProblemImports
-
-open scoped Real
-open scoped Nat
-open scoped Topology
-open scoped Polynomial
-
-"""
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -58,33 +43,51 @@ def _parse_duration(s: str) -> float:
     return total
 
 
-# ── Theorem parsing ──────────────────────────────────────────────────
+# ── Problem loading ──────────────────────────────────────────────────
 
-def _fetch_lean_file(split: str) -> str:
-    url = VALID_URL if split == "valid" else TEST_URL
-    print(f"  Fetching {split.capitalize()}.lean from GitHub...")
-    with urllib.request.urlopen(url, timeout=30) as resp:
-        return resp.read().decode()
+def _strip_doc_comment(text: str) -> str:
+    """Strip Lean `/-- ... -/` wrapper and surrounding whitespace."""
+    text = re.sub(r"^/--\s*", "", text)
+    text = re.sub(r"\s*-/$", "", text)
+    return text.strip()
 
 
-def _parse_theorems(lean_source: str) -> dict[str, dict[str, str]]:
-    """Parse theorem names, informal statements, and formal code.
+def _load_proofnet_problems(jsonl_path: Path,
+                            split: str) -> dict[str, dict[str, str]]:
+    """Load ProofNet problems for a split.
 
-    Returns {name: {"informal": ..., "formal": ...}}.
+    Returns {name: {"informal": ..., "formal": ..., "header": ...}}.
+    `informal` has the `/-- ... -/` wrapper stripped (matches the MiniF2F
+    harness's prompt shape). `formal` is the raw `formal_statement`
+    (ending in `:=` with no body). `header` is the per-problem imports
+    and `open` clauses.
+
+    Several theorems share a name across textbooks (e.g. `exercise_3_3`
+    appears twice in the valid split, `exercise_5_1` three times in
+    test). Following the convention in the ProofNet repo's Lean files
+    and README, the second occurrence gets a `'` suffix, the third `''`,
+    etc., so each benchmark entry has a unique name.
     """
-    theorems: dict[str, dict[str, str]] = {}
-    pattern = re.compile(
-        r"(?:(?P<comment>/--.*?-/)\s*)?"
-        r"^(?P<theorem>theorem\s+(?P<name>\S+).*?:=\s*by\s*\n\s*sorry)",
-        re.MULTILINE | re.DOTALL,
-    )
-    for m in pattern.finditer(lean_source):
-        name = m.group("name")
-        comment = m.group("comment") or ""
-        informal = re.sub(r"^/--\s*", "", comment)
-        informal = re.sub(r"\s*-/$", "", informal).strip()
-        theorems[name] = {"informal": informal, "formal": m.group("theorem")}
-    return theorems
+    problems: dict[str, dict[str, str]] = {}
+    seen: dict[str, int] = {}
+    with jsonl_path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            if rec.get("split") != split:
+                continue
+            base = rec["name"]
+            count = seen.get(base, 0)
+            name = base + "'" * count
+            seen[base] = count + 1
+            problems[name] = {
+                "informal": _strip_doc_comment(rec["informal_prefix"]),
+                "formal": rec["formal_statement"],
+                "header": rec["header"],
+            }
+    return problems
 
 
 # ── Results tracking ─────────────────────────────────────────────────
@@ -94,6 +97,23 @@ def _save_results(bench_dir: Path, results: list[dict]) -> None:
     tmp = bench_dir / "results.json.tmp"
     tmp.write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n")
     tmp.rename(bench_dir / "results.json")
+
+
+def _theorem_lean_text(info: dict[str, str]) -> str:
+    """Build the full Lean theorem file contents for a problem.
+
+    ProofNet's `formal_statement` ends with `:=` and has no body, so we
+    append `by\n  sorry` to give openprover the same `:= by sorry` shape
+    it gets for MiniF2F problems.
+    """
+    # Some JSONL `header` entries start with `open ...` without `import
+    # Mathlib` because in upstream ProofnetValid.lean the import sits at
+    # the top of the file. Extracted as a standalone file, that breaks
+    # every baseline verification with "unknown namespace Topology".
+    header = info["header"]
+    if "import Mathlib" not in header:
+        header = "import Mathlib\n\n" + header
+    return f"{header}{info['formal']} by\n  sorry\n"
 
 
 # ── OpenProver runner ────────────────────────────────────────────────
@@ -134,7 +154,7 @@ def _run_openprover(
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".lean", delete=False, dir=lean_project,
             ) as f:
-                f.write(LEAN_PREAMBLE + info["formal"] + "\n")
+                f.write(_theorem_lean_text(info))
                 tmpfiles.append(f.name)
             cmd.extend(["--lean-project", str(lean_project)])
             cmd.extend(["--lean-theorem", f.name])
@@ -217,7 +237,7 @@ def _run_baseline(
         max_tokens = None
     result = run_baseline(
         name=name,
-        theorem_lean=LEAN_PREAMBLE + info["formal"],
+        theorem_lean=_theorem_lean_text(info),
         theorem_informal=info["informal"],
         lean_project_dir=lean_project,
         model=args.model,
@@ -267,7 +287,7 @@ def _run_all(
     worker = args.worker_model or args.model
     model_label = planner if planner == worker else f"{planner}/{worker}"
     mode = "informal" if args.informal or lean_project is None else "formal"
-    print(f"  MiniF2F {args.split}: {total} problems, method={args.method},"
+    print(f"  ProofNet {args.split}: {total} problems, method={args.method},"
           f" parallelism={args.parallelism},"
           f" model={model_label}, mode={mode}")
     if carried:
@@ -388,17 +408,19 @@ def _import_completed_runs(old_dir: Path, new_dir: Path,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark openprover or baseline against MiniF2F")
+        description="Benchmark openprover or baseline against ProofNet")
     parser.add_argument("split", nargs="?", default="valid",
                         choices=["valid", "test"],
-                        help="Which MiniF2F split (default: valid)")
+                        help="Which ProofNet split (default: valid)")
     parser.add_argument("--method", default="openprover",
                         choices=["openprover", "baseline"],
                         help="Proving method (default: openprover)")
     parser.add_argument("--repo-path", type=Path, default=None,
-                        help="Path to cloned MiniF2F repository (Lean verification)")
+                        help="Path to cloned ProofNet repository "
+                             "(contains data/proofnet.jsonl and ProofNet/ "
+                             "lake project)")
     parser.add_argument("--problem",
-                        help="Run a single theorem (e.g., amc12a_2019_p21)")
+                        help="Run a single theorem (e.g., exercise_1_13a)")
     parser.add_argument("--limit", type=int,
                         help="Limit number of problems")
     parser.add_argument("--skip", type=int, default=0,
@@ -460,12 +482,20 @@ def main():
             setattr(args, key, old_val)
         print(f"  Resuming from {resume_dir}")
 
-    # ── Resolve Lean project ──
+    # ── Resolve repo + Lean project ──
+    if not args.repo_path:
+        parser.error("--repo-path is required (path to the ProofNet repo)")
+    repo_path = args.repo_path.resolve()
+    jsonl_path = repo_path / "data" / "proofnet.jsonl"
+    if not jsonl_path.is_file():
+        print(f"Error: {jsonl_path} not found.", file=sys.stderr)
+        sys.exit(1)
+
     lean_project: Path | None = None
-    if args.repo_path:
-        lean_project = args.repo_path.resolve()
-        if not (lean_project / "lakefile.lean").is_file() \
-                and not (lean_project / "lakefile.toml").is_file():
+    if not args.informal:
+        lean_project = repo_path / "ProofNet"
+        if not (lean_project / "lakefile.toml").is_file() \
+                and not (lean_project / "lakefile.lean").is_file():
             print(f"Error: {lean_project} has no lakefile.", file=sys.stderr)
             sys.exit(1)
         if not (lean_project / ".lake").is_dir():
@@ -474,21 +504,12 @@ def main():
             sys.exit(1)
 
     # ── Load theorems ──
-    if args.repo_path:
-        filename = "Valid.lean" if args.split == "valid" else "Test.lean"
-        lean_path = lean_project / "MiniF2F" / filename
-        if not lean_path.is_file():
-            print(f"Error: {lean_path} not found.", file=sys.stderr)
-            sys.exit(1)
-        lean_source = lean_path.read_text()
-    else:
-        lean_source = _fetch_lean_file(args.split)
-
-    problems = _parse_theorems(lean_source)
+    problems = _load_proofnet_problems(jsonl_path, args.split)
     if not problems:
-        print("Error: No theorems found.", file=sys.stderr)
+        print(f"Error: no theorems found for split '{args.split}' in"
+              f" {jsonl_path}.", file=sys.stderr)
         sys.exit(1)
-    print(f"  Parsed {len(problems)} theorems from MiniF2F {args.split}")
+    print(f"  Parsed {len(problems)} theorems from ProofNet {args.split}")
 
     # ── Check tools ──
     all_models = {args.model, args.planner_model, args.worker_model} - {None}
@@ -533,7 +554,7 @@ def main():
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         model_tag = args.model
         suffix = "-resumed" if resume_dir is not None else ""
-        bench_name = f"{args.method}-{args.split}-{model_tag}{suffix}-{ts}"
+        bench_name = f"{args.method}-proofnet-{args.split}-{model_tag}{suffix}-{ts}"
     bench_dir = benchmarks_root / bench_name
     if bench_dir.exists():
         print(f"Error: {bench_dir} already exists. Use --name to pick a"
