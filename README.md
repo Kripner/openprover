@@ -272,14 +272,14 @@ The `examples/` directory has theorem statements at various difficulty levels:
 
 # Cite
 
-If you find OpenProver helpful in your research cite simply as:
+If you find OpenProver helpful in your research cite as:
 
 ```
-@misc{openprover,
-  author = {Matěj Kripner},
-  title = {OpenProver},
-  year = {2025},
-  publisher = {GitHub},
-  url = {https://github.com/kripner/openprover}
+@inproceedings{openprover,
+  title     = {{OpenProver}: Agentic and Interactive Theorem Proving with {Lean 4}},
+  author    = {Matěj Kripner and Milan Straka},
+  booktitle = {19th Conference on Intelligent Computer Mathematics (CICM 2026)},
+  year      = {2026},
+  url       = {https://arxiv.org/abs/2607.09217}
 }
 ```
