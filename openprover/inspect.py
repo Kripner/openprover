@@ -291,6 +291,7 @@ class InspectTUI:
         self.trace_visible = False
         self.rows = 0
         self.cols = 0
+        self._resize_pending = False
         self._old_termios = None
         self._old_sigwinch = None
 
@@ -317,7 +318,11 @@ class InspectTUI:
         try:
             self._draw()
             while True:
+                if self._resize_pending:
+                    self._apply_resize()
                 key = self._read_key()
+                if self._resize_pending:
+                    self._apply_resize()
                 if key in ("q", "\x1b"):
                     break
                 elif key == "right":
@@ -363,8 +368,13 @@ class InspectTUI:
             self._cleanup()
 
     def _on_resize(self, signum, frame):
+        self._resize_pending = True
+
+    def _apply_resize(self):
+        self._resize_pending = False
         size = shutil.get_terminal_size()
-        self.cols, self.rows = size.columns, size.lines
+        self.cols = max(size.columns, 1)
+        self.rows = max(size.lines, 1)
         self._draw()
 
     def _cleanup(self):
@@ -379,13 +389,22 @@ class InspectTUI:
             signal.signal(signal.SIGWINCH, self._old_sigwinch)
 
     def _read_key(self) -> str:
-        ch = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="replace")
+        try:
+            ch = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="replace")
+        except InterruptedError:
+            return ""
         if ch == "\x1b":
             import select as sel
             if sel.select([sys.stdin], [], [], 0.05)[0]:
-                ch2 = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="replace")
+                try:
+                    ch2 = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="replace")
+                except InterruptedError:
+                    return ""
                 if ch2 == "[":
-                    ch3 = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="replace")
+                    try:
+                        ch3 = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="replace")
+                    except InterruptedError:
+                        return ""
                     if ch3 == "A":
                         return "up"
                     elif ch3 == "B":
@@ -395,15 +414,24 @@ class InspectTUI:
                     elif ch3 == "D":
                         return "left"
                     elif ch3 == "5":
-                        os.read(sys.stdin.fileno(), 1)
+                        try:
+                            os.read(sys.stdin.fileno(), 1)
+                        except InterruptedError:
+                            return ""
                         return "pgup"
                     elif ch3 == "6":
-                        os.read(sys.stdin.fileno(), 1)
+                        try:
+                            os.read(sys.stdin.fileno(), 1)
+                        except InterruptedError:
+                            return ""
                         return "pgdn"
                     elif ch3 == "<":
                         buf = ""
                         while True:
-                            c = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="replace")
+                            try:
+                                c = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="replace")
+                            except InterruptedError:
+                                return ""
                             if c in ("M", "m"):
                                 break
                             buf += c
@@ -417,7 +445,10 @@ class InspectTUI:
                         return ""
                     else:
                         while sel.select([sys.stdin], [], [], 0.01)[0]:
-                            os.read(sys.stdin.fileno(), 1)
+                            try:
+                                os.read(sys.stdin.fileno(), 1)
+                            except InterruptedError:
+                                return ""
                 return "\x1b"
             return "\x1b"
         return ch
