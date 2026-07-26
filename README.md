@@ -198,11 +198,22 @@ python scripts/run_proofnet.py test  --model leanstral --repo-path ./proofnet --
 # ProofBench
 python scripts/run_proofbench.py --model leanstral --repo-path ./miniF2F --max-time 10m
 
+# O(3) irreps tensor products (informal proof + exact symbolic scoring)
+python scripts/run_irreps_tensor_product.py --list
+python scripts/run_irreps_tensor_product.py --split easy --limit 4 --model leanstral --max-time 10m
+
 # Run a single problem
 python scripts/run_minif2f.py valid --problem mathd_algebra_182 --model leanstral --repo-path ./miniF2F
 ```
 
 Use `--informal` to skip Lean verification (faster but scores are not meaningful).
+
+The O(3) irreps benchmark is intentionally different from the Lean-verified
+benchmarks above. Each problem asks for a short tensor-product decomposition,
+and the runner scores exactly one labelled `FINAL ANSWER:` line from
+`PROOF.md` against a deterministic integer/parity oracle. The bundled JSONL
+contains a small sample; pass `--dataset PATH` to evaluate a larger compatible
+dataset without adding it to this repository.
 
 ## Planner actions
 
