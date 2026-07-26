@@ -1,0 +1,12 @@
+{"id":"o3-easy-000","split":"easy","left":"0e","right":"0o","answer":"0o"}
+{"id":"o3-easy-001","split":"easy","left":"0e","right":"4o","answer":"4o"}
+{"id":"o3-easy-002","split":"easy","left":"1o","right":"1o","answer":"0e + 1e + 2e"}
+{"id":"o3-easy-003","split":"easy","left":"2e","right":"3o","answer":"1o + 2o + 3o + 4o + 5o"}
+{"id":"o3-medium-000","split":"medium","left":"4o","right":"2o","answer":"2e + 3e + 4e + 5e + 6e"}
+{"id":"o3-medium-001","split":"medium","left":"3e","right":"5e","answer":"2e + 3e + 4e + 5e + 6e + 7e + 8e"}
+{"id":"o3-medium-002","split":"medium","left":"5o","right":"5o","answer":"0e + 1e + 2e + 3e + 4e + 5e + 6e + 7e + 8e + 9e + 10e"}
+{"id":"o3-medium-003","split":"medium","left":"6e","right":"3o","answer":"3o + 4o + 5o + 6o + 7o + 8o + 9o"}
+{"id":"o3-hard-000","split":"hard","left":"8o","right":"5e","answer":"3o + 4o + 5o + 6o + 7o + 8o + 9o + 10o + 11o + 12o + 13o"}
+{"id":"o3-hard-001","split":"hard","left":"7o","right":"9o","answer":"2e + 3e + 4e + 5e + 6e + 7e + 8e + 9e + 10e + 11e + 12e + 13e + 14e + 15e + 16e"}
+{"id":"o3-hard-002","split":"hard","left":"10e","right":"8o","answer":"2o + 3o + 4o + 5o + 6o + 7o + 8o + 9o + 10o + 11o + 12o + 13o + 14o + 15o + 16o + 17o + 18o"}
+{"id":"o3-hard-003","split":"hard","left":"12o","right":"12o","answer":"0e + 1e + 2e + 3e + 4e + 5e + 6e + 7e + 8e + 9e + 10e + 11e + 12e + 13e + 14e + 15e + 16e + 17e + 18e + 19e + 20e + 21e + 22e + 23e + 24e"}
