@@ -66,6 +66,7 @@ class OpenAIClient:
             reasoning["summary"] = self.reasoning_summary
         payload = {"model": self.model, "input": self._input(messages),
                    "reasoning": reasoning, "store": False,
+                   "include": ["reasoning.encrypted_content"],
                    "max_output_tokens": max_tokens or self.max_output_tokens}
         if tools:
             payload["tools"] = [
