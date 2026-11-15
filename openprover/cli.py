@@ -33,7 +33,10 @@ def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
                      lean_project_dir: Path | None, lean_items: bool,
                      lean_worker_tools: bool, provider_url: str,
                      answer_reserve: int, history_budget: int,
-                     verifier: bool):
+                     verifier: bool,
+                     reasoning_mode: str = 'pro', reasoning_effort: str = 'max',
+                     reasoning_summary: str = 'auto',
+                     openai_base_url: str = 'https://api.openai.com/v1'):
     """Save run configuration so it can be restored on resume."""
     lines = [
         f'version = "{__version__}"',
@@ -53,6 +56,10 @@ def _save_run_config(work_dir: Path, *, planner_model: str, worker_model: str,
         f'answer_reserve = {answer_reserve}',
         f'history_budget = {history_budget}',
         f'verifier = {str(verifier).lower()}',
+        f'reasoning_mode = "{reasoning_mode}"',
+        f'reasoning_effort = "{reasoning_effort}"',
+        f'reasoning_summary = "{reasoning_summary}"',
+        f'openai_base_url = "{openai_base_url}"',
     ]
     (work_dir / RUN_CONFIG_FILE).write_text("\n".join(lines) + "\n")
 
@@ -346,6 +353,14 @@ def _cmd_prove():
                 args.max_time = None
                 args._saved_budget_mode = saved.get("budget_mode", "time")
                 args._saved_budget_limit = saved.get("budget_limit", 3600)
+            if not _cli_flag_given("--reasoning-mode"):
+                args.reasoning_mode = saved.get("reasoning_mode", args.reasoning_mode)
+            if not _cli_flag_given("--reasoning-effort"):
+                args.reasoning_effort = saved.get("reasoning_effort", args.reasoning_effort)
+            if not _cli_flag_given("--reasoning-summary"):
+                args.reasoning_summary = saved.get("reasoning_summary", args.reasoning_summary)
+            if not _cli_flag_given("--openai-base-url"):
+                args.openai_base_url = saved.get("openai_base_url", args.openai_base_url)
             if not _cli_flag_given("--conclude-after"):
                 args.conclude_after = saved.get("conclude_after", args.conclude_after)
             if not _cli_flag_given("-P", "--max-workers"):
@@ -544,6 +559,10 @@ def _cmd_prove():
             answer_reserve=args.answer_reserve,
             history_budget=args.history_budget,
             verifier=args.verifier,
+            reasoning_mode=args.reasoning_mode,
+            reasoning_effort=args.reasoning_effort,
+            reasoning_summary=args.reasoning_summary,
+            openai_base_url=args.openai_base_url,
         )
 
     prover = Prover(
