@@ -11,7 +11,7 @@ from pathlib import Path
 
 from openprover import __version__
 from .budget import Budget, parse_duration
-from .llm import LLMClient, GLMClient, HFClient, MistralClient, OpenRouterClient
+from .llm import LLMClient, GLMClient, HFClient, MistralClient, OpenRouterClient, OpenAIClient
 from .prover import Prover, slugify
 from .tui import TUI, HeadlessTUI
 
@@ -234,9 +234,13 @@ def _cmd_prove():
     model_choices = ["sonnet", "opus", "minimax-m2.5", "leanstral", "glm-5", "kimi-k2.5", "minimax-m2.7"]
     parser.add_argument("run_dir", nargs="?", help="Working directory (resumes if it contains an existing run)")
     parser.add_argument("--theorem", metavar="FILE", help="Path to theorem statement file (.md)")
-    parser.add_argument("--model", default="sonnet", choices=model_choices, help="Model to use for both planner and worker (default: sonnet)")
-    parser.add_argument("--planner-model", choices=model_choices, default=None, help="Override model for planner (defaults to --model)")
-    parser.add_argument("--worker-model", choices=model_choices, default=None, help="Override model for worker (defaults to --model)")
+    parser.add_argument("--model", default="gpt-6-astra", help="Model for planner and worker (default: gpt-6-astra)")
+    parser.add_argument("--planner-model", default=None, help="Override model for planner (defaults to --model)")
+    parser.add_argument("--worker-model", default=None, help="Override model for worker (defaults to --model)")
+    parser.add_argument("--openai-base-url", default="https://api.openai.com/v1", help="Responses API base URL")
+    parser.add_argument("--reasoning-mode", choices=["standard", "pro"], default="pro", help="OpenAI reasoning mode (default: pro)")
+    parser.add_argument("--reasoning-effort", choices=["low", "medium", "high", "xhigh", "max", "model-default"], default="max", help="OpenAI reasoning effort (default: max)")
+    parser.add_argument("--reasoning-summary", choices=["off", "auto", "concise", "detailed"], default="auto", help="OpenAI reasoning summaries (default: auto)")
     parser.add_argument("--provider-url", default="http://localhost:8000", help="Server URL for local models (default: http://localhost:8000)")
     budget_group = parser.add_mutually_exclusive_group()
     budget_group.add_argument("--max-tokens", type=int, default=None, metavar="N", help="Output token budget (mutually exclusive with --max-time)")
@@ -418,6 +422,8 @@ def _cmd_prove():
             )
 
     # Non-Claude models have no web search capability - force isolation
+    if planner_model.startswith("gpt-") and not args.isolation:
+        args.isolation = True  # Search integration belongs to a later PR.
     non_claude_models = {"leanstral"} | GLM_MODELS | OPENROUTER_MODELS
     if planner_model in non_claude_models and not args.isolation:
         args.isolation = True
@@ -440,7 +446,7 @@ def _cmd_prove():
     if args.lean_worker_tools:
         if not args.lean_project:
             parser.error("--lean-worker-tools requires --lean-project")
-        if worker_model not in TOOL_CAPABLE_MODELS:
+        if worker_model not in TOOL_CAPABLE_MODELS and not worker_model.startswith("gpt-"):
             parser.error("--lean-worker-tools requires a tool-capable worker model (sonnet, opus, minimax-m2.5, leanstral, glm-5, kimi-k2.5, or minimax-m2.7)")
         # Auto-fetch Lean Explore data if not available
         from .lean.data import is_lean_data_available, fetch_lean_data
@@ -451,6 +457,16 @@ def _cmd_prove():
                 print("Warning: lean_search will not be available")
 
     def _make_client(model_alias, archive_dir):
+        if model_alias.startswith("gpt-"):
+            key = os.environ.get("OPENAI_API_KEY")
+            if not key:
+                parser.error("OPENAI_API_KEY environment variable not set")
+            return OpenAIClient(model=model_alias, archive_dir=archive_dir,
+                                api_key=key, base_url=args.openai_base_url,
+                                reasoning_mode=args.reasoning_mode,
+                                reasoning_effort=args.reasoning_effort,
+                                reasoning_summary=args.reasoning_summary,
+                                answer_reserve=args.answer_reserve)
         if model_alias in MISTRAL_MODEL_MAP:
             return MistralClient(MISTRAL_MODEL_MAP[model_alias], archive_dir,
                                  answer_reserve=args.answer_reserve)
