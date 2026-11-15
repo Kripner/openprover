@@ -23,11 +23,11 @@ Modes:
 ## OpenAI Responses API
 
 The fork supports OpenAI models through the Responses API using your own
-\`OPENAI_API_KEY\`. The default is **\`gpt-6-astra\`**, **pro** reasoning mode,
+`OPENAI_API_KEY`. The default is **`gpt-6-astra`**, **pro** reasoning mode,
 and **max** reasoning effort. This can consume substantial tokens; start with
 a short budget while testing.
 
-\`\`\`bash
+```bash
 export OPENAI_API_KEY="..."   # Use a secret manager on servers.
 openprover --theorem examples/sqrt2_irrational.md \
   --model gpt-6-astra --reasoning-mode pro \
@@ -37,19 +37,19 @@ openprover --theorem examples/sqrt2_irrational.md \
 openprover --theorem examples/infinite_primes.md \
   --planner-model gpt-6.1-sol --worker-model gpt-6-luna \
   --reasoning-mode standard --reasoning-effort high
-\`\`\`
+```
 
-Options: \`--reasoning-mode standard|pro\`,
-\`--reasoning-effort low|medium|high|xhigh|max|model-default\`,
-\`--reasoning-summary off|auto|concise|detailed\`, and
-\`--openai-base-url\`. OpenAI project access and each model's supported
+Options: `--reasoning-mode standard|pro`,
+`--reasoning-effort low|medium|high|xhigh|max|model-default`,
+`--reasoning-summary off|auto|concise|detailed`, and
+`--openai-base-url`. OpenAI project access and each model's supported
 reasoning settings determine which combinations are valid.
 
 Reasoning summaries are optional diagnostics, **not raw hidden chain-of-thought**.
-The backend archives Responses output and token usage. Its local \`cost\` field
+The backend archives Responses output and token usage. Its local `cost` field
 currently remains zero rather than guessing a price; reliable dollar budgeting
 will be implemented separately. OpenAI literature search and Python tools are
-not enabled by this PR. OpenProver's \`--no-isolation\` literature search is
+not enabled by this PR. OpenProver's `--no-isolation` literature search is
 currently restricted to the existing Claude backend.
 
 ## Requirements
